@@ -15,6 +15,12 @@ No user-facing frontend. No auth system. No database other than Notion. Single-u
 
 The compiled XML output can be exported from Notion as Markdown and pasted into any LLM as structured context.
 
+### Optimization & Formatting Design
+
+To prevent Vercel Serverless Function timeouts (`FUNCTION_INVOCATION_TIMEOUT`) and optimize Markdown exports, the compilation system is designed with:
+- **Parallel Content Fetching**: Page database queries and block structures are fetched concurrently via `Promise.all` instead of sequentially, reducing Notion API query time to a single concurrent batch.
+- **Grouped Multi-line Text Packing**: Rather than creating a separate Notion block for every line of XML (which triggers blank double-spacing in Markdown exports and requires hundreds of API calls), lines are grouped into paragraph blocks of up to 1900 characters (separated by `\n`). This results in a clean, raw, single-spaced Markdown output identical to local files, and reduces API write requests to just one or two per compile job.
+
 ---
 
 ## Tech Stack

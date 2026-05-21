@@ -104,6 +104,12 @@ async function buildXML(thoughtId: string): Promise<string> {
     getIncludedSystemPrompts(),
   ]);
 
+  // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
+  const [promptContents, entryContents] = await Promise.all([
+    Promise.all(prompts.map((p) => readPageContent(p.id))),
+    Promise.all(entries.map((entry) => readPageContent(entry.id))),
+  ]);
+
   const lines: string[] = [];
   lines.push("<cogdex>");
   lines.push("");
@@ -114,10 +120,11 @@ async function buildXML(thoughtId: string): Promise<string> {
   if (prompts.length > 0) {
     lines.push("");
     lines.push("<system_prompts>");
-    for (const p of prompts) {
+    for (let i = 0; i < prompts.length; i++) {
+      const p = prompts[i];
       const name = p.properties?.Name?.title?.[0]?.plain_text ?? "Unnamed";
       const priority = p.properties?.Priority?.number ?? 0;
-      const content = await readPageContent(p.id);
+      const content = promptContents[i];
       lines.push(`  <prompt name="${name}" priority="${priority}">`);
       lines.push(content);
       lines.push(`  </prompt>`);
@@ -127,11 +134,12 @@ async function buildXML(thoughtId: string): Promise<string> {
 
   lines.push("");
   lines.push("<context>");
-  for (const entry of entries) {
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
     const number = entry.properties?.Number?.number ?? "?";
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
     const title = entry.properties?.Title?.title?.[0]?.plain_text ?? "";
-    const content = await readPageContent(entry.id);
+    const content = entryContents[i];
     lines.push(`  <entry number="${number}" type="${type}" title="${title}">`);
     lines.push(content);
     lines.push(`  </entry>`);
@@ -143,15 +151,62 @@ async function buildXML(thoughtId: string): Promise<string> {
   return lines.join("\n");
 }
 
-// Convert plain XML string into Notion paragraph blocks
+// Convert plain XML string into grouped Notion paragraph blocks.
+// Instead of splitting line-by-line (which generates double-spacing in Markdown exports
+// and takes hundreds of API requests), we group lines into paragraph blocks of up to 1900 characters.
 function xmlToNotionBlocks(xml: string): any[] {
-  return xml.split("\n").map((line) => ({
-    object: "block",
-    type: "paragraph",
-    paragraph: {
-      rich_text: [{ type: "text", text: { content: line } }],
-    },
-  }));
+  const lines = xml.split("\n");
+  const blocks: any[] = [];
+  let currentChunk: string[] = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    // If adding this line would exceed the 1900 character safety limit, flush the current chunk first.
+    if (currentLength + line.length + 1 > 1900) {
+      if (currentChunk.length > 0) {
+        blocks.push({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
+          },
+        });
+        currentChunk = [];
+        currentLength = 0;
+      }
+    }
+
+    // If a single line is by itself longer than 1900 characters, chunk it to fit the 1900 limit.
+    if (line.length > 1900) {
+      let remaining = line;
+      while (remaining.length > 0) {
+        const piece = remaining.slice(0, 1900);
+        blocks.push({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: piece } }],
+          },
+        });
+        remaining = remaining.slice(1900);
+      }
+    } else {
+      currentChunk.push(line);
+      currentLength += line.length + 1;
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    blocks.push({
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
+      },
+    });
+  }
+
+  return blocks;
 }
 
 export async function compileAndCreate(thoughtId: string): Promise<void> {
