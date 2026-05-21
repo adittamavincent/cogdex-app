@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import type { PageType } from "@/lib/types";
+import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { createEntry } from "@/lib/entries";
 import { compileAndCreate } from "@/lib/compile";
 
@@ -18,22 +18,13 @@ const VALID_PAGE_TYPES: PageType[] = [
 ];
 
 export async function POST(req: NextRequest) {
-  // --- Read raw body first (for logging and resilient parsing) ---
-  const rawBody = await req.text();
-
-  // Log the full incoming request so we can see exactly what Notion sends
-  console.log("[Cogdex] Incoming webhook", {
-    headers: Object.fromEntries(req.headers.entries()),
-    rawBody,
-  });
-
   // --- Auth ---
   const incomingSecret = req.headers.get("x-cogdex-secret");
   if (incomingSecret !== SECRET) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // --- Page type (from header — differs per button) ---
+  // --- Page type (from header — the only thing that differs per button) ---
   const pageTypeHeader = req.headers.get("x-cogdex-page-type");
   if (!pageTypeHeader || !VALID_PAGE_TYPES.includes(pageTypeHeader as PageType)) {
     return Response.json(
@@ -45,31 +36,22 @@ export async function POST(req: NextRequest) {
   }
   const pageType = pageTypeHeader as PageType;
 
-  // --- Parse body (Notion may send empty body, JSON, or its own native format) ---
-  let parsed: Record<string, unknown> = {};
-  if (rawBody) {
-    try {
-      parsed = JSON.parse(rawBody);
-    } catch {
-      // body exists but isn't valid JSON — log it and continue;
-      // thoughtId will be missing and we'll return a helpful error below
-      console.warn("[Cogdex] Body is not valid JSON:", rawBody);
-    }
+  // --- Parse Notion's automation payload ---
+  // Notion always sends: { source: {...}, data: { id: "<page_id>", ... } }
+  // data.id is the Thought Management row that triggered the button.
+  // No user body configuration is needed — Notion sends this automatically.
+  let payload: NotionAutomationPayload;
+  try {
+    payload = (await req.json()) as NotionAutomationPayload;
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // --- Extract thoughtId ---
-  // Try our custom field first, then fall back to Notion's native page ID field
-  const thoughtId =
-    (parsed.thoughtId as string | undefined) ||
-    (parsed.id as string | undefined);
-
+  const thoughtId = payload?.data?.id;
   if (!thoughtId) {
+    console.error("[Cogdex] Could not extract thoughtId from payload:", payload);
     return Response.json(
-      {
-        error: "Could not determine thoughtId",
-        hint: "Configure the webhook body in Notion to include the current page ID. Check Vercel function logs to see what Notion is sending.",
-        received_body: rawBody || "(empty)",
-      },
+      { error: "Could not extract page ID from Notion payload (expected data.id)" },
       { status: 400 }
     );
   }

@@ -74,21 +74,29 @@ Set the same variables in **Vercel → Project → Settings → Environment Vari
 
 **Endpoint:** `POST /api/cogdex/webhook`
 
-**How it works:** Each button in Thought Management sends a webhook. The **headers** identify which button was pressed and authenticate the request. The **body** carries the current row's page ID (via Notion content variables), which the backend uses to create the related Entry.
+**How it works:** Each button in Thought Management sends a webhook. The `x-cogdex-page-type` header identifies which button was pressed. Notion automatically sends the current row's page data in the request body — no body configuration is needed by the user.
 
-**Headers (all requests):**
+The backend reads `body.data.id` from Notion's payload as the `thoughtId`, then creates or compiles the related Entry.
+
+**Headers (set by you in Notion — the only config):**
 
 | Header | Value | Purpose |
 |---|---|---|
 | `x-cogdex-secret` | your secret | authentication |
 | `x-cogdex-page-type` | `User` / `Response` / `Agreement` / `Checkpoint` / `Attachment` / `Compile` | which button was pressed |
 
-**Body (all requests):**
+**Body:** Sent automatically by Notion — do not configure. Notion sends:
 ```json
-{ "thoughtId": "<current Thought Management page ID>" }
+{
+  "source": { "automation_id": "...", "user_id": "...", ... },
+  "data": {
+    "object": "page",
+    "id": "<Thought Management page ID>",
+    "parent": { "data_source_id": "<TM data source ID>" },
+    "properties": {}
+  }
+}
 ```
-
-`thoughtId` is the only body field. Its value comes from a Notion content variable pointing to the current row's page ID (see Step 5 below for how to pass it).
 
 **Action is derived from `x-cogdex-page-type`:**
 - Any type except `Compile` → creates a new Entry with that type
@@ -137,28 +145,36 @@ For each database: open as full page → `...` → Connections → add `Cogdex A
 
 ### 4. Get Database IDs
 
-Copy each DB's 32-char ID from its URL (`/notion.so/<workspace>/<DATABASE_ID>?v=...`) and set in env vars.
+For each database, open it as a full page, then check its URL:
+```
+https://www.notion.so/<workspace>/<DATABASE_ID>?v=...
+```
+
+The 32-char hex string before `?v=` is the ID to copy.
+
+> **Important for Notion SDK v5:** The code uses `dataSources.query({ data_source_id })`. The `data_source_id` for a database may differ from the `database_id` shown in some contexts. To get the correct `data_source_id`, open the database → `...` → open as page → check the URL, **or** retrieve the ID from a relation property's details (the `data_source_id` field). If queries return "object not found", swap to the other ID.
 
 ### 5. Configure Buttons as Webhook Automations
 
-All 6 buttons share the same URL and body structure. The **only difference between buttons is the `x-cogdex-page-type` header value**.
+All 6 buttons share the same URL. The **only difference between buttons is the `x-cogdex-page-type` header value**. No body configuration is needed — Notion sends the page data automatically.
 
 For each button, configure:
 - **Trigger:** Button clicked
 - **Action:** Send webhook
 - **URL:** `https://<your-vercel-url>/api/cogdex/webhook`
 - **Method:** POST
+- **Body:** leave empty — Notion sends the page data automatically
 
-**Headers** (key/value pairs in the Headers section — two headers, same for all buttons except `x-cogdex-page-type`):
+**Headers** (two headers per button, only `x-cogdex-page-type` differs):
 
 | Key | Value |
 |---|---|
 | `x-cogdex-secret` | your `COGDEX_WEBHOOK_SECRET` value |
-| `x-cogdex-page-type` | see table below — **this is what differentiates each button** |
+| `x-cogdex-page-type` | see table below |
 
-> ⚠️ Do **not** add `Content-Type` — it is a reserved header and will cause an error. Notion sets it automatically.
+> ⚠️ Do **not** add `Content-Type` — reserved header, causes errors.
 
-| Button | `x-cogdex-page-type` header value |
+| Button | `x-cogdex-page-type` value |
 |---|---|
 | `+ User` | `User` |
 | `+ Response` | `Response` |
@@ -166,18 +182,6 @@ For each button, configure:
 | `+ Checkpoint` | `Checkpoint` |
 | `+ Attachment` | `Attachment` |
 | `📦 Compile` | `Compile` |
-
-**Body** (the JSON in the Body section — **identical for all 6 buttons**):
-
-```json
-{ "thoughtId": "{{current_page_id}}" }
-```
-
-This body uses a Notion content variable to send the current Thought Management row's page ID. The backend uses it to:
-1. Create the new Entry in the Entries database
-2. Set the `Thought Management` relation on that Entry to point back to this row
-
-> ⚠️ **Verify `{{current_page_id}}` with Notion's Developer AI** at [https://developers.notion.com](https://developers.notion.com). The exact variable name for the current row's page ID may differ in your Notion version. If it doesn't work, you may need to add a **Formula column** to Thought Management with the formula `id()` and reference that column's value instead.
 
 ### 6. Add Linked Entries View
 
