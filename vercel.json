@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/cogdex/webhook/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
