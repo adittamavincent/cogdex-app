@@ -6,10 +6,7 @@ export type PageType =
   | "Attachment"
   | "Compile";
 
-export type WebhookAction = "create" | "compile";
-
+// Body sent by Notion webhook content — contains the current row's page ID
 export interface CogdexWebhookPayload {
-  action: WebhookAction;
-  thoughtId: string; // Notion page ID of the Thought Management entry
-  pageType?: PageType; // required when action = "create"
+  thoughtId: string; // ID of the Thought Management page (from Notion content variable)
 }
