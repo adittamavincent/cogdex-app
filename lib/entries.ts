@@ -18,8 +18,30 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   const page = await notion.pages.retrieve({ page_id: thoughtId });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const p = page as any;
-  return p.properties?.["Continue Branch"]?.checkbox ?? false;
+  if (!p.properties) {
+    console.error("[Cogdex] No properties found on Thought Management page response:", p);
+    return false;
+  }
+
+  // Find key case-insensitively and stripping whitespace
+  const targetKey = "continuebranch";
+  const matchedKey = Object.keys(p.properties).find(
+    (k) => k.toLowerCase().replace(/\s+/g, "") === targetKey
+  );
+
+  if (!matchedKey) {
+    console.warn(
+      `[Cogdex] "Continue Branch" property not found on Thought Management page. Available properties:`,
+      Object.keys(p.properties)
+    );
+    return false;
+  }
+
+  const isChecked = p.properties[matchedKey]?.checkbox ?? false;
+  console.log(`[Cogdex] Found property "${matchedKey}", value is:`, isChecked);
+  return isChecked;
 }
+
 
 // Returns the entry row with the highest Number for this project (excluding Compile)
 export async function getLatestEntry(thoughtId: string): Promise<any | null> {
@@ -93,6 +115,7 @@ export async function createEntry(params: {
 
   if (!isCompile) {
     continueBranch = await getContinueBranch(thoughtId);
+    console.log(`[Cogdex] continueBranch resolved from database:`, continueBranch);
 
     if (continueBranch) {
       const latest = await getLatestEntry(thoughtId);
@@ -105,12 +128,17 @@ export async function createEntry(params: {
         if (latest.icon) {
           inheritedIcon = latest.icon; // pass through as-is to pages.create
         }
+        console.log(`[Cogdex] Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
+      } else {
+        console.log(`[Cogdex] No latest entry found to inherit from.`);
       }
     }
   }
 
   // --- Number resolution ---
   const number = isCompile ? null : await resolveNumber(thoughtId, continueBranch);
+  console.log(`[Cogdex] Resolved number to assign:`, number);
+
 
   // --- Build properties ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
