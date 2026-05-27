@@ -53,38 +53,23 @@ export async function getLatestEntry(thoughtId: string): Promise<any | null> {
         { property: "Type", select: { does_not_equal: "Compile" } },
       ],
     },
+    sorts: [
+      {
+        property: "Number",
+        direction: "descending",
+      },
+    ],
+    page_size: 1,
   });
 
   if (response.results.length === 0) return null;
-
-  return response.results.reduce((latest: any, current: any) => {
-    const ln = latest.properties?.Number?.number ?? 0;
-    const cn = current.properties?.Number?.number ?? 0;
-    return cn > ln ? current : latest;
-  }, response.results[0]);
+  return response.results[0];
 }
 
 // Returns max(Number) across non-Compile entries for this project
 export async function getMaxNumber(thoughtId: string): Promise<number> {
-  const response = await notion.dataSources.query({
-    data_source_id: ENTRIES_DB_ID,
-    filter: {
-      and: [
-        { property: "Thought Management", relation: { contains: thoughtId } },
-        { property: "Type", select: { does_not_equal: "Compile" } },
-      ],
-    },
-  });
-
-  let max = 0;
-  for (const page of response.results) {
-    if (page.object !== "page") continue;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const p = page as any;
-    const num = p.properties?.Number?.number ?? 0;
-    if (num > max) max = num;
-  }
-  return max;
+  const latest = await getLatestEntry(thoughtId);
+  return latest?.properties?.Number?.number ?? 0;
 }
 
 // Returns the number to assign to a new entry
@@ -93,16 +78,19 @@ export async function getMaxNumber(thoughtId: string): Promise<number> {
 export async function resolveNumber(
   thoughtId: string,
   continueBranch: boolean
-): Promise<number> {
+): Promise<{ number: number; max: number }> {
   const max = await getMaxNumber(thoughtId);
-  if (max === 0) return 1; // first entry always gets 1 regardless of branch flag
-  return continueBranch ? max : max + 1;
+  if (max === 0) return { number: 1, max }; // first entry always gets 1 regardless of branch flag
+  return {
+    number: continueBranch ? max : max + 1,
+    max,
+  };
 }
 
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
-}): Promise<string> {
+}): Promise<{ pageId: string; number: number | null; continueBranch: boolean; max: number }> {
   const { thoughtId, pageType } = params;
 
   const isCompile = pageType === "Compile";
@@ -136,9 +124,14 @@ export async function createEntry(params: {
   }
 
   // --- Number resolution ---
-  const number = isCompile ? null : await resolveNumber(thoughtId, continueBranch);
-  console.log(`[Cogdex] Resolved number to assign:`, number);
-
+  let number: number | null = null;
+  let max = 0;
+  if (!isCompile) {
+    const resolved = await resolveNumber(thoughtId, continueBranch);
+    number = resolved.number;
+    max = resolved.max;
+  }
+  console.log(`[Cogdex] Resolved number to assign:`, number, `(max was: ${max})`);
 
   // --- Build properties ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -169,7 +162,7 @@ export async function createEntry(params: {
   }
 
   const page = await notion.pages.create(createPayload);
-  return page.id;
+  return { pageId: page.id, number, continueBranch, max };
 }
 
 

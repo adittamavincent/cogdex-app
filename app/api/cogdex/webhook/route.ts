@@ -63,8 +63,8 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true });
     }
 
-    const pageId = await createEntry({ thoughtId, pageType });
-    return Response.json({ ok: true, pageId });
+    const result = await createEntry({ thoughtId, pageType });
+    return Response.json({ ok: true, ...result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     console.error("[Cogdex] Webhook error:", err);

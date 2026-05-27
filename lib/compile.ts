@@ -218,7 +218,7 @@ export async function compileAndCreate(thoughtId: string): Promise<void> {
   const xml = await buildXML(thoughtId);
 
   // Create the Compile entry page (Number = null)
-  const pageId = await createEntry({ thoughtId, pageType: "Compile" });
+  const { pageId } = await createEntry({ thoughtId, pageType: "Compile" });
 
   // Write XML as paragraph blocks to the new page.
   // Notion has a 100-blocks-per-append limit — chunk to stay within it.
