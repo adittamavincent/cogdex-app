@@ -72,17 +72,13 @@ export async function getMaxNumber(thoughtId: string): Promise<number> {
   return latest?.properties?.Number?.number ?? 0;
 }
 
-// Returns the number to assign to a new entry
-// continueBranch = true  → reuse max (branch from same position)
-// continueBranch = false → max + 1 (standard increment)
+// Returns the number to assign to a new entry (always increments by one: max + 1)
 export async function resolveNumber(
-  thoughtId: string,
-  continueBranch: boolean
+  thoughtId: string
 ): Promise<{ number: number; max: number }> {
   const max = await getMaxNumber(thoughtId);
-  if (max === 0) return { number: 1, max }; // first entry always gets 1 regardless of branch flag
   return {
-    number: continueBranch ? max : max + 1,
+    number: max + 1,
     max,
   };
 }
@@ -127,11 +123,12 @@ export async function createEntry(params: {
   let number: number | null = null;
   let max = 0;
   if (!isCompile) {
-    const resolved = await resolveNumber(thoughtId, continueBranch);
+    const resolved = await resolveNumber(thoughtId);
     number = resolved.number;
     max = resolved.max;
   }
   console.log(`[Cogdex] Resolved number to assign:`, number, `(max was: ${max})`);
+
 
   // --- Build properties ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
