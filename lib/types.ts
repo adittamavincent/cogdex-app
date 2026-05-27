@@ -23,3 +23,13 @@ export interface NotionAutomationPayload {
     [key: string]: unknown;
   };
 }
+
+export type WebhookAction = "create" | "compile";
+
+export interface CogdexWebhookPayload {
+  action: WebhookAction;
+  thoughtId: string;
+  pageType?: PageType;
+  continueBranch?: boolean; // NEW — if true, reuse latest number instead of incrementing
+}
+

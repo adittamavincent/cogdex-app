@@ -13,21 +13,14 @@ const TEMPLATES: Record<PageType, string> = {
   Compile: "", // filled by compile logic
 };
 
-export async function getNextNumber(thoughtId: string): Promise<number> {
-  // Query all Entries for this project where Type != Compile
-  // SDK v5: notion.databases.query → notion.dataSources.query({ data_source_id })
+// Returns max(Number) across non-Compile entries for this project
+export async function getMaxNumber(thoughtId: string): Promise<number> {
   const response = await notion.dataSources.query({
     data_source_id: ENTRIES_DB_ID,
     filter: {
       and: [
-        {
-          property: "Thought Management",
-          relation: { contains: thoughtId },
-        },
-        {
-          property: "Type",
-          select: { does_not_equal: "Compile" },
-        },
+        { property: "Thought Management", relation: { contains: thoughtId } },
+        { property: "Type", select: { does_not_equal: "Compile" } },
       ],
     },
   });
@@ -40,17 +33,30 @@ export async function getNextNumber(thoughtId: string): Promise<number> {
     const num = p.properties?.Number?.number ?? 0;
     if (num > max) max = num;
   }
-  return max + 1;
+  return max;
+}
+
+// Returns the number to assign to a new entry
+// continueBranch = true  → reuse max (branch from same position)
+// continueBranch = false → max + 1 (standard increment)
+export async function resolveNumber(
+  thoughtId: string,
+  continueBranch: boolean
+): Promise<number> {
+  const max = await getMaxNumber(thoughtId);
+  if (max === 0) return 1; // first entry always gets 1 regardless of branch flag
+  return continueBranch ? max : max + 1;
 }
 
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
+  continueBranch?: boolean;
 }): Promise<string> {
-  const { thoughtId, pageType } = params;
+  const { thoughtId, pageType, continueBranch = false } = params;
 
   const isCompile = pageType === "Compile";
-  const number = isCompile ? null : await getNextNumber(thoughtId);
+  const number = isCompile ? null : await resolveNumber(thoughtId, continueBranch);
 
   // Build page properties
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,6 +81,7 @@ export async function createEntry(params: {
 
   return page.id;
 }
+
 
 // Minimal markdown-to-Notion-blocks converter for templates.
 // Only handles headings (##) and paragraphs — intentionally minimal.

@@ -77,13 +77,18 @@ async function getIncludedEntries(thoughtId: string) {
   return entries.sort((a, b) => {
     const na: number | null = a.properties?.Number?.number ?? null;
     const nb: number | null = b.properties?.Number?.number ?? null;
-    if (na !== null && nb !== null) return na - nb;
+    if (na !== null && nb !== null) {
+      if (na !== nb) return na - nb;
+      // Same number → sort by created_time (branch ordering)
+      return new Date(a.created_time).getTime() - new Date(b.created_time).getTime();
+    }
     if (na !== null) return -1;
     if (nb !== null) return 1;
     return (
       new Date(a.created_time).getTime() - new Date(b.created_time).getTime()
     );
   });
+
 }
 
 // Fetch all Include=true system prompts, sorted by Priority
