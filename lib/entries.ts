@@ -97,25 +97,23 @@ export async function createEntry(params: {
   let inheritedIcon: any = undefined;
   let continueBranch = false;
 
-  if (!isCompile) {
-    continueBranch = await getContinueBranch(thoughtId);
-    console.log(`[Cogdex] continueBranch resolved from database:`, continueBranch);
+  continueBranch = await getContinueBranch(thoughtId);
+  console.log(`[Cogdex] continueBranch resolved from database:`, continueBranch);
 
-    if (continueBranch) {
-      const latest = await getLatestEntry(thoughtId);
-      if (latest) {
-        // Copy title
-        inheritedTitle =
-          latest.properties?.Title?.title?.[0]?.plain_text ?? "";
+  if (continueBranch) {
+    const latest = await getLatestEntry(thoughtId);
+    if (latest) {
+      // Copy title
+      inheritedTitle =
+        latest.properties?.Title?.title?.[0]?.plain_text ?? "";
 
-        // Copy icon (emoji or external URL)
-        if (latest.icon) {
-          inheritedIcon = latest.icon; // pass through as-is to pages.create
-        }
-        console.log(`[Cogdex] Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
-      } else {
-        console.log(`[Cogdex] No latest entry found to inherit from.`);
+      // Copy icon (emoji or external URL)
+      if (latest.icon) {
+        inheritedIcon = latest.icon; // pass through as-is to pages.create
       }
+      console.log(`[Cogdex] Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
+    } else {
+      console.log(`[Cogdex] No latest entry found to inherit from.`);
     }
   }
 
