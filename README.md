@@ -80,39 +80,16 @@ Set the same variables in **Vercel → Project → Settings → Environment Vari
 
 **Endpoint:** `POST /api/cogdex/webhook`
 
-**Authentication Header:** All requests must include the `x-cogdex-secret` header set to your `COGDEX_WEBHOOK_SECRET` value.
+**How it works:** Each button in Thought Management sends a webhook. The `x-cogdex-page-type` header identifies which button was pressed. Notion automatically sends the current row's page data in the request body — no body configuration is needed by the user.
 
-The endpoint supports two formats for incoming webhook payloads:
+The backend reads `body.data.id` from Notion's payload as the `thoughtId`, then creates or compiles the related Entry.
 
-### 1. Custom Payload Format (New & Recommended)
+**Headers (set by you in Notion — the only config):**
 
-This format allows explicit control over entry creation, specifically enabling the **Continue Branch** feature.
-
-**Headers:**
-- `x-cogdex-secret`: `your-webhook-secret`
-
-**Body:**
-```json
-{
-  "action": "create",
-  "thoughtId": "{{current_page_id}}",
-  "pageType": "User",
-  "continueBranch": false
-}
-```
-
-- `action`: `create` or `compile`
-- `thoughtId`: The page ID of the Thought Management row (synced via Notion's dynamic template variable).
-- `pageType`: One of `User`, `Response`, `Agreement`, `Checkpoint`, `Attachment` (required when `action` is `create`).
-- `continueBranch`: Optional boolean. If `true`, the new entry reuses the latest numbered entry's number for that project instead of incrementing it (modeling a branching conversation). Defaults to `false`.
-
-### 2. Legacy / Automated Payload Format
-
-Notion automatically sends the current row's page data in the request body — no body configuration is needed.
-
-**Headers:**
-- `x-cogdex-secret`: `your-webhook-secret`
-- `x-cogdex-page-type`: `User` / `Response` / `Agreement` / `Checkpoint` / `Attachment` / `Compile`
+| Header | Value | Purpose |
+|---|---|---|
+| `x-cogdex-secret` | your secret | authentication |
+| `x-cogdex-page-type` | `User` / `Response` / `Agreement` / `Checkpoint` / `Attachment` / `Compile` | which button was pressed |
 
 **Body:** Sent automatically by Notion — do not configure. Notion sends:
 ```json
@@ -127,8 +104,9 @@ Notion automatically sends the current row's page data in the request body — n
 }
 ```
 
-- Any type except `Compile` → creates a new Entry with that type (always increments number, no branch support).
-- `Compile` → compiles all included entries into an XML context page.
+**Action is derived from `x-cogdex-page-type`:**
+- Any type except `Compile` → creates a new Entry with that type (inheriting `Title` and page `icon` from the latest numbered entry in that project if `Continue Branch` is checked in the Thought Management page).
+- `Compile` → compiles all included entries into an XML context page
 
 
 ---
@@ -152,10 +130,8 @@ Copy the Internal Integration Token → this is your `NOTION_TOKEN`.
 - `Continue Branch` (Checkbox, default unchecked)
 - `Date Deprecated` (Date)
 - `Build Github` (URL)
-- Buttons:
-  - Standard buttons: `+ User`, `+ Response`, `+ Agreement`, `+ Checkpoint`, `+ Attachment`
-  - Branch buttons: `⤷ User`, `⤷ Response`, `⤷ Agreement`, `⤷ Checkpoint`, `⤷ Attachment`
-  - Compile button: `📦 Compile`
+- 6 Buttons: `+ User`, `+ Response`, `+ Agreement`, `+ Checkpoint`, `+ Attachment`, `📦 Compile` (configure after deploy)
+
 
 
 **Entries** (columns):
@@ -190,37 +166,33 @@ The 32-char hex string before `?v=` is the ID to copy.
 
 ### 5. Configure Buttons as Webhook Automations
 
-Since Notion button automations cannot conditionally read a checkbox in the same row at click time to modify the webhook body dynamically, you have two practical options:
-
-#### Option A: Two sets of buttons (Recommended & simplest)
-Create **two versions of each button** in Thought Management using custom payloads:
-- **Standard Buttons** (e.g., `+ User`): Sends `"continueBranch": false`
-- **Branch Buttons** (e.g., `⤷ User`): Sends `"continueBranch": true`
+All 6 buttons share the same URL. The **only difference between buttons is the `x-cogdex-page-type` header value**. No body configuration is needed — Notion sends the page data automatically.
 
 For each button, configure:
 - **Trigger:** Button clicked
 - **Action:** Send webhook
 - **URL:** `https://<your-vercel-url>/api/cogdex/webhook`
 - **Method:** POST
-- **Headers:**
-  - `x-cogdex-secret`: `your-webhook-secret`
-- **Body:** Select **Custom JSON** and paste:
-  ```json
-  {
-    "action": "create",
-    "thoughtId": "{{current_page_id}}",
-    "pageType": "User",
-    "continueBranch": false
-  }
-  ```
-  *(Be sure to replace `"User"` with the correct pageType for each button, and toggle `"continueBranch"` to `true` for branch `⤷` button variants. Replace `{{current_page_id}}` with Notion's dynamic template variable for the page ID)*
+- **Body:** leave empty — Notion sends the page data automatically
 
-#### Option B: Legacy automatic buttons (No branching support)
-If you do not need branching support and prefer no body configuration, you can use the automatic webhook:
-- **Headers:**
-  - `x-cogdex-secret`: `your-webhook-secret`
-  - `x-cogdex-page-type`: `User` / `Response` / `Agreement` / `Checkpoint` / `Attachment` / `Compile`
-- **Body:** Leave empty.
+**Headers** (two headers per button, only `x-cogdex-page-type` differs):
+
+| Key | Value |
+|---|---|
+| `x-cogdex-secret` | your `COGDEX_WEBHOOK_SECRET` value |
+| `x-cogdex-page-type` | see table below |
+
+> ⚠️ Do **not** add `Content-Type` — reserved header, causes errors.
+
+| Button | `x-cogdex-page-type` value |
+|---|---|
+| `+ User` | `User` |
+| `+ Response` | `Response` |
+| `+ Agreement` | `Agreement` |
+| `+ Checkpoint` | `Checkpoint` |
+| `+ Attachment` | `Attachment` |
+| `📦 Compile` | `Compile` |
+
 
 
 ### 6. Add Linked Entries View

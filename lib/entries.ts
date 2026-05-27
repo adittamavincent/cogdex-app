@@ -13,6 +13,35 @@ const TEMPLATES: Record<PageType, string> = {
   Compile: "", // filled by compile logic
 };
 
+// Read Continue Branch flag from a Thought Management page
+export async function getContinueBranch(thoughtId: string): Promise<boolean> {
+  const page = await notion.pages.retrieve({ page_id: thoughtId });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = page as any;
+  return p.properties?.["Continue Branch"]?.checkbox ?? false;
+}
+
+// Returns the entry row with the highest Number for this project (excluding Compile)
+export async function getLatestEntry(thoughtId: string): Promise<any | null> {
+  const response = await notion.dataSources.query({
+    data_source_id: ENTRIES_DB_ID,
+    filter: {
+      and: [
+        { property: "Thought Management", relation: { contains: thoughtId } },
+        { property: "Type", select: { does_not_equal: "Compile" } },
+      ],
+    },
+  });
+
+  if (response.results.length === 0) return null;
+
+  return response.results.reduce((latest: any, current: any) => {
+    const ln = latest.properties?.Number?.number ?? 0;
+    const cn = current.properties?.Number?.number ?? 0;
+    return cn > ln ? current : latest;
+  }, response.results[0]);
+}
+
 // Returns max(Number) across non-Compile entries for this project
 export async function getMaxNumber(thoughtId: string): Promise<number> {
   const response = await notion.dataSources.query({
@@ -51,17 +80,44 @@ export async function resolveNumber(
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
-  continueBranch?: boolean;
 }): Promise<string> {
-  const { thoughtId, pageType, continueBranch = false } = params;
+  const { thoughtId, pageType } = params;
 
   const isCompile = pageType === "Compile";
+
+  // --- Continue Branch logic ---
+  let inheritedTitle = "";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let inheritedIcon: any = undefined;
+  let continueBranch = false;
+
+  if (!isCompile) {
+    continueBranch = await getContinueBranch(thoughtId);
+
+    if (continueBranch) {
+      const latest = await getLatestEntry(thoughtId);
+      if (latest) {
+        // Copy title
+        inheritedTitle =
+          latest.properties?.Title?.title?.[0]?.plain_text ?? "";
+
+        // Copy icon (emoji or external URL)
+        if (latest.icon) {
+          inheritedIcon = latest.icon; // pass through as-is to pages.create
+        }
+      }
+    }
+  }
+
+  // --- Number resolution ---
   const number = isCompile ? null : await resolveNumber(thoughtId, continueBranch);
 
-  // Build page properties
+  // --- Build properties ---
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const properties: any = {
-    Title: { title: [{ text: { content: "" } }] },
+    Title: {
+      title: [{ text: { content: inheritedTitle } }],
+    },
     Type: { select: { name: pageType } },
     Include: { checkbox: true },
     "Thought Management": { relation: [{ id: thoughtId }] },
@@ -71,14 +127,20 @@ export async function createEntry(params: {
     properties.Number = { number };
   }
 
-  // SDK v5: parent.database_id → parent.data_source_id
-  const page = await notion.pages.create({
+  // --- Build pages.create payload ---
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const createPayload: any = {
     parent: { data_source_id: ENTRIES_DB_ID },
     properties,
     children:
-      pageType !== "Compile" ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
-  });
+      !isCompile ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
+  };
 
+  if (inheritedIcon) {
+    createPayload.icon = inheritedIcon;
+  }
+
+  const page = await notion.pages.create(createPayload);
   return page.id;
 }
 
