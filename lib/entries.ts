@@ -1,8 +1,24 @@
 import { notion } from "./notion";
 import { PageType } from "./types";
-import { debug, warn, error as logError, info } from "./logger";
+import { debug, warn, error as logError } from "./logger";
 
 const ENTRIES_DB_ID = process.env.NOTION_ENTRIES_DB_ID!;
+
+interface NotionPage {
+  properties?: Record<string, {
+    checkbox?: boolean;
+    number?: number | null;
+    title?: Array<{ plain_text?: string }>;
+    select?: { name?: string } | null;
+    relation?: Array<{ id: string }>;
+  }>;
+  icon?: {
+    type: "emoji" | "external" | "file";
+    emoji?: string;
+    external?: { url: string };
+    file?: { url: string };
+  } | null;
+}
 
 // Page body templates per Type
 const TEMPLATES: Record<PageType, string> = {
@@ -17,8 +33,7 @@ const TEMPLATES: Record<PageType, string> = {
 // Read Continue Branch flag from a Thought Management page
 export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   const page = await notion.pages.retrieve({ page_id: thoughtId });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const p = page as any;
+  const p = page as unknown as NotionPage;
   if (!p.properties) {
     logError("No properties found on Thought Management page response:", p);
     return false;
@@ -45,7 +60,7 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
 
 
 // Returns the entry row with the highest Number for this project (excluding Compile)
-export async function getLatestEntry(thoughtId: string): Promise<any | null> {
+export async function getLatestEntry(thoughtId: string): Promise<NotionPage | null> {
   const response = await notion.dataSources.query({
     data_source_id: ENTRIES_DB_ID,
     filter: {
@@ -64,7 +79,7 @@ export async function getLatestEntry(thoughtId: string): Promise<any | null> {
   });
 
   if (response.results.length === 0) return null;
-  return response.results[0];
+  return response.results[0] as unknown as NotionPage;
 }
 
 // Returns max(Number) across non-Compile entries for this project
@@ -94,8 +109,7 @@ export async function createEntry(params: {
 
   // --- Continue Branch logic ---
   let inheritedTitle = "";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let inheritedIcon: any = undefined;
+  let inheritedIcon: NotionPage["icon"] = undefined;
   let continueBranch = false;
 
   continueBranch = await getContinueBranch(thoughtId);
@@ -130,8 +144,7 @@ export async function createEntry(params: {
 
 
   // --- Build properties ---
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const properties: any = {
+  const properties: Record<string, unknown> = {
     Title: {
       title: [{ text: { content: inheritedTitle } }],
     },
@@ -145,8 +158,12 @@ export async function createEntry(params: {
   }
 
   // --- Build pages.create payload ---
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const createPayload: any = {
+  const createPayload: {
+    parent: { data_source_id: string };
+    properties: Record<string, unknown>;
+    children: Record<string, unknown>[];
+    icon?: NotionPage["icon"];
+  } = {
     parent: { data_source_id: ENTRIES_DB_ID },
     properties,
     children:
@@ -157,18 +174,17 @@ export async function createEntry(params: {
     createPayload.icon = inheritedIcon;
   }
 
-  const page = await notion.pages.create(createPayload);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const page = await notion.pages.create(createPayload as any);
   return { pageId: page.id, number, continueBranch, max };
 }
 
 
 // Minimal markdown-to-Notion-blocks converter for templates.
 // Only handles headings (##) and paragraphs — intentionally minimal.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function markdownToNotionBlocks(md: string): any[] {
+function markdownToNotionBlocks(md: string): Record<string, unknown>[] {
   const lines = md.split("\n");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const blocks: any[] = [];
+  const blocks: Record<string, unknown>[] = [];
 
   for (const line of lines) {
     if (line.startsWith("## ")) {

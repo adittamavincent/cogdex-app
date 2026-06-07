@@ -1,8 +1,36 @@
 import { notion } from "./notion";
 import { createEntry } from "./entries";
+import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRIES_DB_ID = process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
+
+interface NotionBlock {
+  type: string;
+  has_children?: boolean;
+  id: string;
+  [key: string]: unknown;
+}
+
+interface NotionRichText {
+  plain_text?: string;
+}
+
+interface NotionPage {
+  id: string;
+  created_time: string;
+  properties?: Record<string, {
+    checkbox?: boolean;
+    number?: number | null;
+    title?: Array<{ plain_text?: string }>;
+    select?: { name?: string } | null;
+    relation?: Array<{ id: string }>;
+    Name?: { title?: Array<{ plain_text?: string }> };
+    Priority?: { number?: number };
+    Title?: { title?: Array<{ plain_text?: string }> };
+    Type?: { select?: { name?: string } };
+  }>;
+}
 
 // The 00-info protocol block — hardcoded, always prepended
 const PROTOCOL = `
@@ -28,14 +56,14 @@ async function readPageContent(pageId: string): Promise<string> {
   const blocks = await notion.blocks.children.list({ block_id: pageId });
   const lines: string[] = [];
 
-  for (const block of blocks.results as any[]) {
-    const type = block.type as string;
-    const data = block[type];
+  for (const block of blocks.results as unknown as NotionBlock[]) {
+    const type = block.type;
+    const data = block[type] as { rich_text?: NotionRichText[] } | undefined;
 
     if (!data) continue;
 
     const richText = data.rich_text ?? [];
-    const text = richText.map((t: any) => t.plain_text ?? "").join("");
+    const text = richText.map((t) => t.plain_text ?? "").join("");
 
     if (type === "heading_1") lines.push(`# ${text}`);
     else if (type === "heading_2") lines.push(`## ${text}`);
@@ -71,7 +99,7 @@ async function getIncludedEntries(thoughtId: string) {
     },
   });
 
-  const entries = response.results as any[];
+  const entries = response.results as unknown as NotionPage[];
 
   // Sort: entries with Number first (ascending), then null-Number by created_time
   return entries.sort((a, b) => {
@@ -99,7 +127,7 @@ async function getIncludedSystemPrompts() {
     filter: { property: "Include", checkbox: { equals: true } },
     sorts: [{ property: "Priority", direction: "ascending" }],
   });
-  return response.results as any[];
+  return response.results as unknown as NotionPage[];
 }
 
 // Build the full XML context string
@@ -159,9 +187,9 @@ async function buildXML(thoughtId: string): Promise<string> {
 // Convert plain XML string into grouped Notion paragraph blocks.
 // Instead of splitting line-by-line (which generates double-spacing in Markdown exports
 // and takes hundreds of API requests), we group lines into paragraph blocks of up to 1900 characters.
-function xmlToNotionBlocks(xml: string): any[] {
+function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
   const lines = xml.split("\n");
-  const blocks: any[] = [];
+  const blocks: Record<string, unknown>[] = [];
   let currentChunk: string[] = [];
   let currentLength = 0;
 
@@ -228,7 +256,7 @@ export async function compileAndCreate(thoughtId: string): Promise<void> {
     // SDK v5: blocks.children.append is unchanged
     await notion.blocks.children.append({
       block_id: pageId,
-      children: blocks.slice(i, i + CHUNK),
+      children: blocks.slice(i, i + CHUNK) as BlockObjectRequest[],
     });
   }
 }
