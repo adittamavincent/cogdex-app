@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { createEntry } from "@/lib/entries";
 import { compileAndCreate } from "@/lib/compile";
+import { error as logError } from "@/lib/logger";
 
 // Force Node.js runtime (required for Notion SDK and long-running compile jobs)
 export const runtime = "nodejs";
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
 
   const thoughtId = payload?.data?.id;
   if (!thoughtId) {
-    console.error("[Cogdex] Could not extract thoughtId from payload:", payload);
+    logError("Could not extract thoughtId from payload:", payload);
     return Response.json(
       { error: "Could not extract page ID from Notion payload (expected data.id)" },
       { status: 400 }
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ ok: true, ...result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
-    console.error("[Cogdex] Webhook error:", err);
+    logError("Webhook error:", err);
     return Response.json({ error: message }, { status: 500 });
   }
 }

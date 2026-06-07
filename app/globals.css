@@ -47,3 +47,17 @@ a {
     color-scheme: dark;
   }
 }
+
+/* Site header and logo */
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+}
+
+.logo {
+  height: 36px;
+  width: auto;
+  display: inline-block;
+}

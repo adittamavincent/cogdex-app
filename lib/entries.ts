@@ -1,5 +1,6 @@
 import { notion } from "./notion";
 import { PageType } from "./types";
+import { debug, warn, error as logError, info } from "./logger";
 
 const ENTRIES_DB_ID = process.env.NOTION_ENTRIES_DB_ID!;
 
@@ -19,7 +20,7 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const p = page as any;
   if (!p.properties) {
-    console.error("[Cogdex] No properties found on Thought Management page response:", p);
+    logError("No properties found on Thought Management page response:", p);
     return false;
   }
 
@@ -30,15 +31,15 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   );
 
   if (!matchedKey) {
-    console.warn(
-      `[Cogdex] "Continue Branch" property not found on Thought Management page. Available properties:`,
+    warn(
+      `"Continue Branch" property not found on Thought Management page. Available properties:`,
       Object.keys(p.properties)
     );
     return false;
   }
 
   const isChecked = p.properties[matchedKey]?.checkbox ?? false;
-  console.log(`[Cogdex] Found property "${matchedKey}", value is:`, isChecked);
+  debug(`Found property "${matchedKey}", value is:`, isChecked);
   return isChecked;
 }
 
@@ -98,7 +99,7 @@ export async function createEntry(params: {
   let continueBranch = false;
 
   continueBranch = await getContinueBranch(thoughtId);
-  console.log(`[Cogdex] continueBranch resolved from database:`, continueBranch);
+  debug(`continueBranch resolved from database:`, continueBranch);
 
   if (continueBranch) {
     const latest = await getLatestEntry(thoughtId);
@@ -111,9 +112,9 @@ export async function createEntry(params: {
       if (latest.icon) {
         inheritedIcon = latest.icon; // pass through as-is to pages.create
       }
-      console.log(`[Cogdex] Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
+      debug(`Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
     } else {
-      console.log(`[Cogdex] No latest entry found to inherit from.`);
+      debug(`No latest entry found to inherit from.`);
     }
   }
 
@@ -125,7 +126,7 @@ export async function createEntry(params: {
     number = resolved.number;
     max = resolved.max;
   }
-  console.log(`[Cogdex] Resolved number to assign:`, number, `(max was: ${max})`);
+  debug(`Resolved number to assign:`, number, `(max was: ${max})`);
 
 
   // --- Build properties ---
