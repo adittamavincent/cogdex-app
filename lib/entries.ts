@@ -229,8 +229,16 @@ export async function createEntry(params: {
       } catch (updateProjectErr) {
         warn(`Could not update Project ${thoughtId} branch relation:`, updateProjectErr);
       }
-    } catch (createBranchErr) {
+    } catch (createBranchErr: any) {
       logError("Failed to create start branch:", createBranchErr);
+      if (createBranchErr?.code === "object_not_found") {
+        throw new Error(
+          `Could not access Branch database with ID: ${BRANCH_DB_ID}. ` +
+          `Please make sure you have connected/shared your Notion integration ` +
+          `("Notion and VS Code" or "Cogdex App") with the Branch database in Notion (click ... -> Connections -> Add Connection).`
+        );
+      }
+      throw createBranchErr;
     }
   } else {
     // Fetch icon from existing branch
