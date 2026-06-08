@@ -4,7 +4,8 @@ export type PageType =
   | "Agreement"
   | "Checkpoint"
   | "Attachment"
-  | "Compile";
+  | "Compile"
+  | "Branch";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button

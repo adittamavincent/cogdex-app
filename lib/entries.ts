@@ -20,6 +20,14 @@ interface NotionPage {
   } | null;
 }
 
+const EMOJIS = [
+  "🌿", "🌸", "🍁", "🍄", "🌴", "🌵", "🌶️", "🍇", "🥑", "🍋",
+  "⭐", "🔥", "⚡", "💧", "🌈", "🌊", "❄️", "🌀", "🔮", "💎",
+  "🤖", "👾", "🚀", "🛸", "🦖", "🦊", "🐙", "🦉", "🦁", "🦄",
+  "🎨", "🎭", "🎪", "🎸", "🎯", "🧩", "🎲", "🎬", "🎤", "🛹",
+  "🧭", "🔭", "🕯️", "🔑", "🛡️", "🧬", "🧪", "⚙️", "🔋", "🔔"
+];
+
 // Page body templates per Type
 const TEMPLATES: Record<PageType, string> = {
   User: "## Intent\n\n\n## Brain Dump\n\n",
@@ -28,14 +36,36 @@ const TEMPLATES: Record<PageType, string> = {
   Checkpoint: "## Current State\n\n\n## Stable Context\n\n",
   Attachment: "## Source\n\n\n## Notes\n\n",
   Compile: "", // filled by compile logic
+  Branch: "",
 };
 
-// Read Continue Branch flag from a Thought Management page
+function findProperty(properties: Record<string, any>, name: string): any {
+  const targetKey = name.toLowerCase().replace(/\s+/g, "");
+  const matchedKey = Object.keys(properties).find(
+    (k) => k.toLowerCase().replace(/\s+/g, "") === targetKey
+  );
+  return matchedKey ? properties[matchedKey] : null;
+}
+
+export async function setRandomBranchIcon(branchId: string): Promise<string> {
+  const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  await notion.pages.update({
+    page_id: branchId,
+    icon: {
+      type: "emoji",
+      emoji: randomEmoji,
+    },
+  });
+  debug(`Set random icon for branch ${branchId}: ${randomEmoji}`);
+  return randomEmoji;
+}
+
+// Read Continue Branch flag from a Project page
 export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   const page = await notion.pages.retrieve({ page_id: thoughtId });
   const p = page as unknown as NotionPage;
   if (!p.properties) {
-    logError("No properties found on Thought Management page response:", p);
+    logError("No properties found on Project page response:", p);
     return false;
   }
 
@@ -47,7 +77,7 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
 
   if (!matchedKey) {
     warn(
-      `"Continue Branch" property not found on Thought Management page. Available properties:`,
+      `"Continue Branch" property not found on Project page. Available properties:`,
       Object.keys(p.properties)
     );
     return false;
@@ -58,14 +88,13 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   return isChecked;
 }
 
-
 // Returns the entry row with the highest Number for this project (excluding Compile)
 export async function getLatestEntry(thoughtId: string): Promise<NotionPage | null> {
   const response = await notion.dataSources.query({
     data_source_id: ENTRIES_DB_ID,
     filter: {
       and: [
-        { property: "Thought Management", relation: { contains: thoughtId } },
+        { property: "Project", relation: { contains: thoughtId } },
         { property: "Type", select: { does_not_equal: "Compile" } },
       ],
     },
@@ -107,11 +136,39 @@ export async function createEntry(params: {
 
   const isCompile = pageType === "Compile";
 
-  // --- Continue Branch logic ---
   let inheritedTitle = "";
   let inheritedIcon: NotionPage["icon"] = undefined;
   let continueBranch = false;
+  let linkedBranchId: string | undefined = undefined;
 
+  // Retrieve project page to find Branch relation
+  try {
+    const projectPage = await notion.pages.retrieve({ page_id: thoughtId });
+    const p = projectPage as any;
+    if (p.properties) {
+      const branchProp = findProperty(p.properties, "Branch");
+      const branchId = branchProp?.relation?.[0]?.id;
+      if (branchId) {
+        linkedBranchId = branchId;
+        debug(`Project is linked to Branch: ${branchId}`);
+        // Fetch branch page to get its icon
+        try {
+          const branchPage = await notion.pages.retrieve({ page_id: branchId });
+          const bp = branchPage as any;
+          if (bp.icon) {
+            inheritedIcon = bp.icon;
+            debug(`Inherited icon from Branch:`, inheritedIcon);
+          }
+        } catch (branchErr) {
+          warn(`Could not retrieve Branch page ${branchId}:`, branchErr);
+        }
+      }
+    }
+  } catch (err) {
+    warn(`Could not retrieve Project page ${thoughtId} to check for Branch:`, err);
+  }
+
+  // If no branch was found / resolved icon from branch, fallback to Continue Branch check
   continueBranch = await getContinueBranch(thoughtId);
   debug(`continueBranch resolved from database:`, continueBranch);
 
@@ -119,12 +176,12 @@ export async function createEntry(params: {
     const latest = await getLatestEntry(thoughtId);
     if (latest) {
       // Copy title
-      inheritedTitle =
-        latest.properties?.Title?.title?.[0]?.plain_text ?? "";
+      const nameProp = latest.properties ? findProperty(latest.properties, "Name") : null;
+      inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
 
-      // Copy icon (emoji or external URL)
-      if (latest.icon) {
-        inheritedIcon = latest.icon; // pass through as-is to pages.create
+      // If we didn't get an icon from the branch, copy from latest entry
+      if (!inheritedIcon && latest.icon) {
+        inheritedIcon = latest.icon;
       }
       debug(`Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
     } else {
@@ -135,26 +192,29 @@ export async function createEntry(params: {
   // --- Number resolution ---
   let number: number | null = null;
   let max = 0;
-  if (!isCompile) {
+  if (!isCompile && pageType !== "Branch") {
     const resolved = await resolveNumber(thoughtId);
     number = resolved.number;
     max = resolved.max;
   }
   debug(`Resolved number to assign:`, number, `(max was: ${max})`);
 
-
   // --- Build properties ---
   const properties: Record<string, unknown> = {
-    Title: {
+    Name: {
       title: [{ text: { content: inheritedTitle } }],
     },
     Type: { select: { name: pageType } },
     Include: { checkbox: true },
-    "Thought Management": { relation: [{ id: thoughtId }] },
+    Project: { relation: [{ id: thoughtId }] },
   };
 
   if (number !== null) {
     properties.Number = { number };
+  }
+
+  if (linkedBranchId) {
+    properties.Branch = { relation: [{ id: linkedBranchId }] };
   }
 
   // --- Build pages.create payload ---
@@ -167,7 +227,7 @@ export async function createEntry(params: {
     parent: { data_source_id: ENTRIES_DB_ID },
     properties,
     children:
-      !isCompile ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
+      (!isCompile && pageType !== "Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
   };
 
   if (inheritedIcon) {
@@ -178,7 +238,6 @@ export async function createEntry(params: {
   const page = await notion.pages.create(createPayload as any);
   return { pageId: page.id, number, continueBranch, max };
 }
-
 
 // Minimal markdown-to-Notion-blocks converter for templates.
 // Only handles headings (##) and paragraphs — intentionally minimal.

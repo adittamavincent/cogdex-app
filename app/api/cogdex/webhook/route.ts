@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry } from "@/lib/entries";
+import { createEntry, setRandomBranchIcon } from "@/lib/entries";
 import { compileAndCreate } from "@/lib/compile";
 import { error as logError } from "@/lib/logger";
 
@@ -16,6 +16,7 @@ const VALID_PAGE_TYPES: PageType[] = [
   "Checkpoint",
   "Attachment",
   "Compile",
+  "Branch",
 ];
 
 export async function POST(req: NextRequest) {
@@ -62,6 +63,11 @@ export async function POST(req: NextRequest) {
     if (pageType === "Compile") {
       await compileAndCreate(thoughtId);
       return Response.json({ ok: true });
+    }
+
+    if (pageType === "Branch") {
+      const emoji = await setRandomBranchIcon(thoughtId);
+      return Response.json({ ok: true, icon: emoji });
     }
 
     const result = await createEntry({ thoughtId, pageType });

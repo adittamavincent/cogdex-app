@@ -92,7 +92,7 @@ async function getIncludedEntries(thoughtId: string) {
     data_source_id: ENTRIES_DB_ID,
     filter: {
       and: [
-        { property: "Thought Management", relation: { contains: thoughtId } },
+        { property: "Project", relation: { contains: thoughtId } },
         { property: "Include", checkbox: { equals: true } },
         { property: "Type", select: { does_not_equal: "Compile" } },
       ],
@@ -171,7 +171,7 @@ async function buildXML(thoughtId: string): Promise<string> {
     const entry = entries[i];
     const number = entry.properties?.Number?.number ?? "?";
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
-    const title = entry.properties?.Title?.title?.[0]?.plain_text ?? "";
+    const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     const content = entryContents[i];
     lines.push(`  <entry number="${number}" type="${type}" title="${title}">`);
     lines.push(content);
