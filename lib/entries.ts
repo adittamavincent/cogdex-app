@@ -3,6 +3,7 @@ import { PageType } from "./types";
 import { debug, warn, error as logError } from "./logger";
 
 const ENTRIES_DB_ID = process.env.NOTION_ENTRIES_DB_ID!;
+const BRANCH_DB_ID = process.env.NOTION_BRANCH_DB_ID || "375bd597-c2f9-80cb-9055-f69d21f54170";
 
 interface NotionPage {
   properties?: Record<string, {
@@ -141,51 +142,107 @@ export async function createEntry(params: {
   let continueBranch = false;
   let linkedBranchId: string | undefined = undefined;
 
-  // Retrieve project page to find Branch relation
-  try {
-    const projectPage = await notion.pages.retrieve({ page_id: thoughtId });
-    const p = projectPage as any;
-    if (p.properties) {
-      const branchProp = findProperty(p.properties, "Branch");
-      const branchId = branchProp?.relation?.[0]?.id;
-      if (branchId) {
-        linkedBranchId = branchId;
-        debug(`Project is linked to Branch: ${branchId}`);
-        // Fetch branch page to get its icon
-        try {
-          const branchPage = await notion.pages.retrieve({ page_id: branchId });
-          const bp = branchPage as any;
-          if (bp.icon) {
-            inheritedIcon = bp.icon;
-            debug(`Inherited icon from Branch:`, inheritedIcon);
-          }
-        } catch (branchErr) {
-          warn(`Could not retrieve Branch page ${branchId}:`, branchErr);
-        }
-      }
-    }
-  } catch (err) {
-    warn(`Could not retrieve Project page ${thoughtId} to check for Branch:`, err);
-  }
-
-  // If no branch was found / resolved icon from branch, fallback to Continue Branch check
+  // Retrieve Continue Branch flag
   continueBranch = await getContinueBranch(thoughtId);
   debug(`continueBranch resolved from database:`, continueBranch);
 
   if (continueBranch) {
-    const latest = await getLatestEntry(thoughtId);
-    if (latest) {
-      // Copy title
-      const nameProp = latest.properties ? findProperty(latest.properties, "Name") : null;
-      inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
-
-      // If we didn't get an icon from the branch, copy from latest entry
-      if (!inheritedIcon && latest.icon) {
-        inheritedIcon = latest.icon;
+    // 1. Try to get branch from Project page properties
+    try {
+      const projectPage = await notion.pages.retrieve({ page_id: thoughtId });
+      const p = projectPage as any;
+      if (p.properties) {
+        const branchProp = findProperty(p.properties, "Branch");
+        const branchId = branchProp?.relation?.[0]?.id;
+        if (branchId) {
+          linkedBranchId = branchId;
+          debug(`Found branch from Project: ${branchId}`);
+        }
       }
-      debug(`Inheriting from latest entry: title="${inheritedTitle}", icon=`, inheritedIcon);
+    } catch (err) {
+      warn(`Could not retrieve Project page ${thoughtId} to check for Branch:`, err);
+    }
+
+    // 2. If not found, try to get branch from the latest Entry for this project
+    if (!linkedBranchId) {
+      const latest = await getLatestEntry(thoughtId);
+      if (latest && latest.properties) {
+        const branchProp = findProperty(latest.properties, "Branch");
+        const branchId = branchProp?.relation?.[0]?.id;
+        if (branchId) {
+          linkedBranchId = branchId;
+          debug(`Found branch from latest Entry: ${branchId}`);
+        }
+
+        // Get title if continueBranch is true
+        const nameProp = findProperty(latest.properties, "Name");
+        inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
+      }
     } else {
-      debug(`No latest entry found to inherit from.`);
+      // If we found branch from Project, still get inherited title from latest Entry
+      const latest = await getLatestEntry(thoughtId);
+      if (latest && latest.properties) {
+        const nameProp = findProperty(latest.properties, "Name");
+        inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
+      }
+    }
+  }
+
+  // If no branch was found (or continueBranch is false), create a new Branch "start"
+  if (!linkedBranchId) {
+    const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+    debug(`Creating new Branch "start" with icon ${randomEmoji}`);
+    try {
+      const newBranchPage = await notion.pages.create({
+        parent: { data_source_id: BRANCH_DB_ID },
+        properties: {
+          Name: {
+            title: [{ text: { content: "start" } }]
+          },
+          Project: {
+            relation: [{ id: thoughtId }]
+          }
+        },
+        icon: {
+          type: "emoji",
+          emoji: randomEmoji
+        }
+      });
+      linkedBranchId = newBranchPage.id;
+      inheritedIcon = {
+        type: "emoji",
+        emoji: randomEmoji
+      };
+      debug(`Created branch ID: ${linkedBranchId}`);
+
+      // Update Project page's Branch relation to point to this new Branch
+      try {
+        await notion.pages.update({
+          page_id: thoughtId,
+          properties: {
+            Branch: {
+              relation: [{ id: linkedBranchId }]
+            }
+          }
+        });
+        debug(`Updated Project page ${thoughtId} with new Branch relation`);
+      } catch (updateProjectErr) {
+        warn(`Could not update Project ${thoughtId} branch relation:`, updateProjectErr);
+      }
+    } catch (createBranchErr) {
+      logError("Failed to create start branch:", createBranchErr);
+    }
+  } else {
+    // Fetch icon from existing branch
+    try {
+      const branchPage = await notion.pages.retrieve({ page_id: linkedBranchId });
+      const bp = branchPage as any;
+      if (bp.icon) {
+        inheritedIcon = bp.icon;
+        debug(`Inherited icon from Branch:`, inheritedIcon);
+      }
+    } catch (branchErr) {
+      warn(`Could not retrieve Branch page ${linkedBranchId}:`, branchErr);
     }
   }
 
