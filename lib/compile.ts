@@ -2,7 +2,7 @@ import { notion } from "./notion";
 import { createEntry } from "./entries";
 import type { BlockObjectRequest } from "@notionhq/client";
 
-const ENTRIES_DB_ID = process.env.NOTION_ENTRIES_DB_ID!;
+const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
 
 interface NotionBlock {
@@ -89,7 +89,7 @@ async function readPageContent(pageId: string): Promise<string> {
 // SDK v5: notion.dataSources.query({ data_source_id })
 async function getIncludedEntries(thoughtId: string) {
   const response = await notion.dataSources.query({
-    data_source_id: ENTRIES_DB_ID,
+    data_source_id: ENTRY_DB_ID,
     filter: {
       and: [
         { property: "Project", relation: { contains: thoughtId } },

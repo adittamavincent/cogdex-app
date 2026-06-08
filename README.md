@@ -64,8 +64,9 @@ Create `.env.local` (never commit this file):
 
 ```env
 NOTION_TOKEN=secret_xxxxxxxxxxxx
-NOTION_ENTRIES_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_THOUGHT_MANAGEMENT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_ENTRY_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_PROJECT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_BRANCH_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_SYSTEM_PROMPT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 COGDEX_WEBHOOK_SECRET=pick_a_long_random_string_here
 ```
