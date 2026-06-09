@@ -6,6 +6,7 @@ const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
 
 interface NotionPage {
+  id: string;
   properties?: Record<string, {
     checkbox?: boolean;
     number?: number | null;
@@ -36,6 +37,7 @@ const TEMPLATES: Record<PageType, string> = {
   Canvas: "## Canvas\n\n",
   Compile: "", // filled by compile logic
   Branch: "",
+  "New Branch": "",
   Reset: "",
 };
 
@@ -60,33 +62,52 @@ export async function setRandomBranchIcon(branchId: string): Promise<string> {
   return randomEmoji;
 }
 
-// Read Continue Branch flag from a Project page
-export async function getContinueBranch(thoughtId: string): Promise<boolean> {
-  const page = await notion.pages.retrieve({ page_id: thoughtId });
-  const p = page as unknown as NotionPage;
-  if (!p.properties) {
-    logError("No properties found on Project page response:", p);
-    return false;
-  }
 
-  // Find key case-insensitively and stripping whitespace
-  const targetKey = "continuebranch";
-  const matchedKey = Object.keys(p.properties).find(
-    (k) => k.toLowerCase().replace(/\s+/g, "") === targetKey
-  );
+async function getBranchDbId(thoughtId: string): Promise<string> {
+  let resolvedBranchDbId = process.env.NOTION_BRANCH_DB_ID;
+  if (resolvedBranchDbId) return resolvedBranchDbId;
 
-  if (!matchedKey) {
-    warn(
-      `"Continue Branch" property not found on Project page. Available properties:`,
-      Object.keys(p.properties)
-    );
-    return false;
-  }
+  try {
+    const projectPage = await notion.pages.retrieve({ page_id: thoughtId }) as any;
+    if (projectPage && projectPage.parent) {
+      let projectDbId = "";
+      if (projectPage.parent.type === "database_id") {
+        projectDbId = projectPage.parent.database_id;
+      } else if (projectPage.parent.type === "data_source_id") {
+        projectDbId = projectPage.parent.data_source_id;
+      }
+      
+      if (projectDbId) {
+        const db = await notion.databases.retrieve({ database_id: projectDbId }) as any;
+        const branchProp = findProperty(db.properties, "Branch");
+        if (branchProp && branchProp.type === "relation" && branchProp.relation) {
+          const dbId = branchProp.relation.database_id || branchProp.relation.data_source_id;
+          if (dbId) return dbId;
+        }
+      }
+    }
+  } catch (err) {}
 
-  const isChecked = p.properties[matchedKey]?.checkbox ?? false;
-  debug(`Found property "${matchedKey}", value is:`, isChecked);
-  return isChecked;
+  return "379bd597-c2f9-80a3-a8b9-d8adba3f3d9e"; // user's new branch db id
 }
+
+async function getBranchesForProject(projectId: string, branchDbId: string) {
+  const response = await notion.dataSources.query({
+    data_source_id: branchDbId,
+    filter: {
+      property: "Project",
+      relation: { contains: projectId },
+    },
+    sorts: [
+      {
+        timestamp: "created_time",
+        direction: "descending",
+      },
+    ],
+  });
+  return response.results as unknown as NotionPage[];
+}
+
 
 // Returns the entry row sorted by created_time descending for this project (excluding Compile)
 export async function getLatestEntry(thoughtId: string): Promise<NotionPage | null> {
@@ -111,173 +132,126 @@ export async function getLatestEntry(thoughtId: string): Promise<NotionPage | nu
   return response.results[0] as unknown as NotionPage;
 }
 
+export async function handleNewBranchClick(projectId: string) {
+
+  const branchDbId = await getBranchDbId(projectId);
+  const branches = await getBranchesForProject(projectId, branchDbId);
+  if (branches.length === 0) return;
+
+  const newestBranch = branches[0];
+  const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  
+  await notion.pages.update({
+    page_id: newestBranch.id,
+    properties: { Active: { checkbox: true } },
+    icon: (newestBranch.icon as any) || { type: "emoji", emoji: randomEmoji },
+  });
+
+  for (let i = 1; i < branches.length; i++) {
+    const b = branches[i];
+    const isActive = findProperty(b.properties || {}, "Active")?.checkbox;
+    if (isActive) {
+      await notion.pages.update({
+        page_id: b.id,
+        properties: { Active: { checkbox: false } }
+      });
+    }
+  }
+}
+
+export async function handleSetActiveClick(branchId: string) {
+  const branchPage = await notion.pages.retrieve({ page_id: branchId }) as unknown as NotionPage;
+  const projectId = findProperty(branchPage.properties || {}, "Project")?.relation?.[0]?.id;
+  if (!projectId) return;
+
+  const branchDbId = await getBranchDbId(projectId);
+  const branches = await getBranchesForProject(projectId, branchDbId);
+
+  for (const b of branches) {
+    const shouldBeActive = b.id === branchId;
+    const isCurrentlyActive = findProperty(b.properties || {}, "Active")?.checkbox;
+    
+    if (shouldBeActive && !isCurrentlyActive) {
+      await notion.pages.update({
+        page_id: b.id,
+        properties: { Active: { checkbox: true } }
+      });
+    } else if (!shouldBeActive && isCurrentlyActive) {
+      await notion.pages.update({
+        page_id: b.id,
+        properties: { Active: { checkbox: false } }
+      });
+    }
+  }
+}
+
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
-}): Promise<{ pageId: string; continueBranch: boolean }> {
+}): Promise<{ pageId?: string; continueBranch?: boolean; ignored?: boolean }> {
   const { thoughtId, pageType } = params;
-
   const isCompile = pageType === "Compile";
-
   let inheritedTitle = "";
   let inheritedIcon: NotionPage["icon"] = undefined;
-  let continueBranch = false;
-  let linkedBranchId: string | undefined = undefined;
+  const resolvedBranchDbId = await getBranchDbId(thoughtId);
 
-  // 1. Retrieve Project page parent and try to dynamically resolve Branch Database ID
-  let resolvedBranchDbId = process.env.NOTION_BRANCH_DB_ID;
-  let projectPage: any = null;
+  const branches = await getBranchesForProject(thoughtId, resolvedBranchDbId);
+  const activeBranch = branches.find(b => findProperty(b.properties || {}, "Active")?.checkbox);
+  let linkedBranchId: string | undefined = activeBranch?.id;
 
-  try {
-    projectPage = await notion.pages.retrieve({ page_id: thoughtId });
-    if (!resolvedBranchDbId && projectPage && projectPage.parent) {
-      let projectDbId = "";
-      if (projectPage.parent.type === "database_id") {
-        projectDbId = (projectPage.parent as any).database_id;
-      } else if (projectPage.parent.type === "data_source_id") {
-        projectDbId = (projectPage.parent as any).data_source_id;
-      }
-      
-      if (projectDbId) {
-        debug(`Retrieved Project parent database ID: ${projectDbId}`);
-        try {
-          const db = await notion.databases.retrieve({ database_id: projectDbId }) as any;
-          const branchProp = findProperty(db.properties, "Branch");
-          if (branchProp && branchProp.type === "relation" && branchProp.relation) {
-            const dbId = branchProp.relation.database_id || branchProp.relation.data_source_id;
-            if (dbId) {
-              resolvedBranchDbId = dbId;
-              debug(`Dynamically resolved Branch DB ID from Project schema: ${resolvedBranchDbId}`);
-            } else {
-              warn(`Branch relation schema found, but database_id/data_source_id is missing:`, branchProp);
-            }
-          } else {
-            warn(`Branch property not found on Project database schema:`, db.properties);
-          }
-        } catch (dbErr) {
-          warn(`Could not retrieve Project parent database ${projectDbId} schema:`, dbErr);
-        }
-      }
+  if (activeBranch) {
+    inheritedIcon = activeBranch.icon;
+    const latest = await getLatestEntry(thoughtId);
+    if (latest && latest.properties) {
+      const nameProp = findProperty(latest.properties, "Name");
+      inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
     }
-  } catch (err) {
-    warn(`Could not retrieve Project page ${thoughtId} properties:`, err);
-  }
-
-  if (!resolvedBranchDbId) {
-    resolvedBranchDbId = "375bd597-c2f9-80cb-9055-f69d21f54170";
-  }
-
-  // Retrieve Continue Branch flag
-  continueBranch = await getContinueBranch(thoughtId);
-  debug(`continueBranch resolved from database:`, continueBranch);
-
-  if (continueBranch) {
-    // Try to get branch from Project page properties
-    if (projectPage && projectPage.properties) {
-      const branchProp = findProperty(projectPage.properties, "Branch");
-      const branchId = branchProp?.relation?.[0]?.id;
-      if (branchId) {
-        linkedBranchId = branchId;
-        debug(`Found branch from Project properties: ${branchId}`);
-      }
-    }
-
-    // If not found, try to get branch from the latest Entry for this project
-    if (!linkedBranchId) {
-      const latest = await getLatestEntry(thoughtId);
-      if (latest && latest.properties) {
-        const branchProp = findProperty(latest.properties, "Branch");
-        const branchId = branchProp?.relation?.[0]?.id;
-        if (branchId) {
-          linkedBranchId = branchId;
-          debug(`Found branch from latest Entry: ${branchId}`);
-        }
-
-        // Get title if continueBranch is true
-        const nameProp = findProperty(latest.properties, "Name");
-        inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
-      }
-    } else {
-      // If we found branch from Project, still get inherited title from latest Entry
-      const latest = await getLatestEntry(thoughtId);
-      if (latest && latest.properties) {
-        const nameProp = findProperty(latest.properties, "Name");
-        inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
-      }
-    }
-  }
-
-  // If no branch was found (or continueBranch is false), create a new Branch "start"
-  if (!linkedBranchId) {
+  } else {
     const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
-    debug(`Creating new Branch "start" in DB ${resolvedBranchDbId} with icon ${randomEmoji}`);
+    debug(`Creating new Branch "init" in DB ${resolvedBranchDbId}`);
     try {
       const newBranchPage = await notion.pages.create({
         parent: { data_source_id: resolvedBranchDbId },
         properties: {
-          Name: {
-            title: [{ text: { content: "start" } }]
-          },
-          Project: {
-            relation: [{ id: thoughtId }]
-          }
+          Name: { title: [{ text: { content: "init" } }] },
+          Project: { relation: [{ id: thoughtId }] },
+          Active: { checkbox: true }
         },
-        icon: {
-          type: "emoji",
-          emoji: randomEmoji
-        }
+        icon: { type: "emoji", emoji: randomEmoji }
       });
       linkedBranchId = newBranchPage.id;
-      inheritedIcon = {
-        type: "emoji",
-        emoji: randomEmoji
-      };
-      debug(`Created branch ID: ${linkedBranchId}`);
-
-      // Update Project page's Branch relation to point to this new Branch
+      inheritedIcon = { type: "emoji", emoji: randomEmoji };
       try {
         await notion.pages.update({
           page_id: thoughtId,
-          properties: {
-            Branch: {
-              relation: [{ id: linkedBranchId }]
-            }
-          }
+          properties: { Branch: { relation: [{ id: linkedBranchId }] } }
         });
-        debug(`Updated Project page ${thoughtId} with new Branch relation`);
-      } catch (updateProjectErr) {
-        warn(`Could not update Project ${thoughtId} branch relation:`, updateProjectErr);
-      }
-    } catch (createBranchErr: any) {
-      logError("Failed to create start branch:", createBranchErr);
-      if (createBranchErr?.code === "object_not_found") {
-        throw new Error(
-          `Could not access Branch database with ID: ${resolvedBranchDbId}. ` +
-          `Please make sure you have connected/shared your Notion integration ` +
-          `("Notion and VS Code" or "Cogdex App") with the Branch database in Notion (click ... -> Connections -> Add Connection).`
-        );
-      }
+      } catch {}
+    } catch (createBranchErr) {
+      logError("Failed to create init branch:", createBranchErr);
       throw createBranchErr;
-    }
-  } else {
-    // Fetch icon from existing branch
-    try {
-      const branchPage = await notion.pages.retrieve({ page_id: linkedBranchId });
-      const bp = branchPage as any;
-      if (bp.icon) {
-        inheritedIcon = bp.icon;
-        debug(`Inherited icon from Branch:`, inheritedIcon);
-      }
-    } catch (branchErr) {
-      warn(`Could not retrieve Branch page ${linkedBranchId}:`, branchErr);
     }
   }
 
-  // --- Build properties ---
+  if (pageType === "Canvas" && linkedBranchId) {
+    const existingCanvasResponse = await notion.dataSources.query({
+      data_source_id: ENTRY_DB_ID,
+      filter: {
+        and: [
+          { property: "Branch", relation: { contains: linkedBranchId } },
+          { property: "Type", select: { equals: "Canvas" } }
+        ]
+      },
+      page_size: 1
+    });
+    if (existingCanvasResponse.results.length > 0) {
+      debug(`Canvas already exists in branch ${linkedBranchId}, ignoring`);
+      return { ignored: true };
+    }
+  }
+
   const properties: Record<string, unknown> = {
-    Name: {
-      title: [{ text: { content: inheritedTitle } }],
-    },
+    Name: { title: [{ text: { content: inheritedTitle } }] },
     Type: { select: { name: pageType } },
     Include: { checkbox: true },
     Project: { relation: [{ id: thoughtId }] },
@@ -287,26 +261,16 @@ export async function createEntry(params: {
     properties.Branch = { relation: [{ id: linkedBranchId }] };
   }
 
-  // --- Build pages.create payload ---
-  const createPayload: {
-    parent: { data_source_id: string };
-    properties: Record<string, unknown>;
-    children: Record<string, unknown>[];
-    icon?: NotionPage["icon"];
-  } = {
+  const createPayload: any = {
     parent: { data_source_id: ENTRY_DB_ID },
     properties,
-    children:
-      (!isCompile && pageType !== "Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
+    children: (!isCompile && pageType !== "Branch" && pageType !== "New Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
   };
 
-  if (inheritedIcon) {
-    createPayload.icon = inheritedIcon;
-  }
+  if (inheritedIcon) createPayload.icon = inheritedIcon;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const page = await notion.pages.create(createPayload as any);
-  return { pageId: page.id, continueBranch };
+  const page = await notion.pages.create(createPayload);
+  return { pageId: page.id, continueBranch: true };
 }
 
 // Minimal markdown-to-Notion-blocks converter for templates.

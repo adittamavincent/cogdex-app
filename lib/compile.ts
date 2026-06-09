@@ -244,7 +244,7 @@ export async function compileAndCreate(thoughtId: string): Promise<void> {
   for (let i = 0; i < blocks.length; i += CHUNK) {
     // SDK v5: blocks.children.append is unchanged
     await notion.blocks.children.append({
-      block_id: pageId,
+      block_id: pageId!,
       children: blocks.slice(i, i + CHUNK) as BlockObjectRequest[],
     });
   }

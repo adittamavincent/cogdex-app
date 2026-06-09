@@ -4,6 +4,7 @@ export type PageType =
   | "Canvas"
   | "Compile"
   | "Branch"
+  | "New Branch"
   | "Reset";
 
 // Notion automation webhook — actual payload shape sent by Notion

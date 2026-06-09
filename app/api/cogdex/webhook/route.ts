@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry, setRandomBranchIcon, relinkDatabases } from "@/lib/entries";
+import { createEntry, relinkDatabases, handleNewBranchClick, handleSetActiveClick } from "@/lib/entries";
 import { compileAndCreate } from "@/lib/compile";
 import { error as logError } from "@/lib/logger";
 
@@ -17,6 +17,7 @@ const VALID_PAGE_TYPES: PageType[] = [
   "Canvas",
   "Compile",
   "Branch",
+  "New Branch",
   "Reset",
 ];
 
@@ -76,8 +77,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (pageType === "Branch") {
-      const emoji = await setRandomBranchIcon(thoughtId);
-      return Response.json({ ok: true, icon: emoji });
+      await handleNewBranchClick(thoughtId);
+      return Response.json({ ok: true });
+    }
+
+    if (pageType === "New Branch") {
+      await handleSetActiveClick(thoughtId);
+      return Response.json({ ok: true });
     }
 
     if (pageType === "Reset") {
