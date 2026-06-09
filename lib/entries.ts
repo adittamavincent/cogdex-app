@@ -431,15 +431,26 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     try {
       debug(`Retrieving actual schema for data source ${dataSourceId} to sanitize property configurations`);
       const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId }) as any;
-      const validPropertyIds = new Set([
-        "title",
-        ...Object.values(db.properties).map((prop: any) => prop.id),
-      ]);
+      const validPropertyIds = new Set(
+        Object.values(db.properties).flatMap((prop: any) => [
+          prop.id,
+          decodeURIComponent(prop.id),
+          encodeURIComponent(prop.id),
+        ])
+      );
+      validPropertyIds.add("title");
 
       if (configuration && configuration.properties && Array.isArray(configuration.properties)) {
-        configuration.properties = configuration.properties.filter(
-          (p: any) => p.property_id && validPropertyIds.has(p.property_id)
-        );
+        configuration.properties = configuration.properties.filter((p: any) => {
+          if (!p.property_id) return false;
+          const decoded = decodeURIComponent(p.property_id);
+          const encoded = encodeURIComponent(p.property_id);
+          return (
+            validPropertyIds.has(p.property_id) ||
+            validPropertyIds.has(decoded) ||
+            validPropertyIds.has(encoded)
+          );
+        });
         debug(`Sanitized properties list: kept ${configuration.properties.length} valid properties`);
       }
     } catch (schemaErr) {
