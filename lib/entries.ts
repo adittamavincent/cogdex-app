@@ -997,6 +997,143 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
   return blocks;
 }
 
+function blockToPlainText(block: any): string {
+  const type = block.type;
+  if (!block[type] || !block[type].rich_text) return "";
+  return block[type].rich_text.map((t: any) => t.plain_text || t.text?.content || "").join("");
+}
+
+function processTableDiff(lines: string[]): Record<string, unknown> {
+  const rows = lines.map(l => {
+    const cells = l.trim().split("|").slice(1, -1).map(c => c.trim());
+    return { type: "table_row", table_row: { cells: cells.map(c => [{ type: "text", text: { content: c }, plain_text: c }]) } };
+  });
+  const hasHeader = rows.length >= 2 && rows[1].table_row.cells.every(c => c[0].plain_text.replace(/-/g, '').trim() === '');
+  let dataRows = rows;
+  if (hasHeader) {
+     dataRows = [rows[0], ...rows.slice(2)];
+  }
+  return { type: "table", table: { table_width: dataRows[0].table_row.cells.length, has_column_header: hasHeader, has_row_header: false, children: dataRows } };
+}
+
+function markdownLineToBlockDiff(line: string): Record<string, unknown> {
+  const trimmed = line.trim();
+  if (trimmed === "") {
+    return { type: "paragraph", paragraph: { rich_text: [] } };
+  }
+  if (trimmed === "---" || trimmed === "***" || trimmed === "___") {
+    return { type: "divider", divider: {} };
+  }
+  const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+  if (headingMatch) {
+    const level = Math.min(headingMatch[1].length, 3);
+    const type = `heading_${level}`;
+    return { type, [type]: { rich_text: [{ type: "text", text: { content: headingMatch[2] }, plain_text: headingMatch[2] }] } };
+  }
+  const bulletMatch = trimmed.match(/^\s*[-*+]\s+(.*)$/);
+  if (bulletMatch) {
+    return { type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ type: "text", text: { content: bulletMatch[1] }, plain_text: bulletMatch[1] }] } };
+  }
+  const numberMatch = trimmed.match(/^\s*\d+\.\s+(.*)$/);
+  if (numberMatch) {
+    return { type: "numbered_list_item", numbered_list_item: { rich_text: [{ type: "text", text: { content: numberMatch[1] }, plain_text: numberMatch[1] }] } };
+  }
+  const quoteMatch = trimmed.match(/^\s*>\s*(.*)$/);
+  if (quoteMatch) {
+    const richText = [];
+    let text = quoteMatch[1];
+    const boldMatch = text.match(/\*\*(.*?)\*\*/g);
+    if (boldMatch) {
+        const parts = text.split(/\*\*(.*?)\*\*/);
+        for(let i = 0; i < parts.length; i++) {
+           if(i % 2 === 1) {
+              richText.push({ type: "text", text: { content: parts[i] }, plain_text: parts[i], annotations: { bold: true, italic: false, strikethrough: false, underline: false, code: false, color: "default" }});
+           } else if(parts[i]) {
+              richText.push({ type: "text", text: { content: parts[i] }, plain_text: parts[i] });
+           }
+        }
+    } else {
+        richText.push({ type: "text", text: { content: text }, plain_text: text });
+    }
+    return { type: "quote", quote: { rich_text: richText } };
+  }
+  return { type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: trimmed }, plain_text: trimmed }] } };
+}
+
+export function applyDiffToBlocks(blocks: any[], diffText: string): any[] {
+  let result = [...blocks];
+  const hunks = parseDiff(diffText);
+  if (!hunks.length) return result;
+
+  const blockTexts = blocks.map(b => blockToPlainText(b).trim().toLowerCase());
+
+  for (const hunk of hunks) {
+      const operations: any[] = [];
+      let tableLines: string[] = [];
+      const flushTable = () => {
+         if (tableLines.length > 0) {
+            operations.push({ type: '+table', lines: tableLines });
+            tableLines = [];
+         }
+      }
+
+      for (const line of hunk.lines) {
+         if (line.startsWith("-")) {
+            flushTable();
+            let text = line.slice(1).trim();
+            text = text.replace(/^(#{1,6}|[-*+]|\d+\.|>)\s+/, '').trim().toLowerCase();
+            operations.push({ type: '-', text: text });
+         } else if (line.startsWith("+")) {
+            let text = line.slice(1).trim();
+            if (text.startsWith("|")) {
+               tableLines.push(text);
+            } else {
+               flushTable();
+               operations.push({ type: '+', text: text });
+            }
+         } else if (line.startsWith(" ")) {
+            flushTable();
+            let text = line.slice(1).trim();
+            text = text.replace(/^(#{1,6}|[-*+]|\d+\.|>)\s+/, '').trim().toLowerCase();
+            operations.push({ type: ' ', text: text });
+         }
+      }
+      flushTable();
+
+      let insertIndex = result.length;
+      for(let i=0; i < result.length; i++) {
+         const op = operations.find(o => o.type === '-' || o.type === ' ');
+         if (op && blockTexts[i].includes(op.text)) {
+            insertIndex = i;
+            break;
+         }
+      }
+
+      const newBlocks: any[] = [];
+      let currentIdx = insertIndex;
+      
+      for (const op of operations) {
+         if (op.type === '-') {
+            const matched = result.findIndex((b, idx) => idx >= currentIdx && blockTexts[idx].includes(op.text));
+            if (matched !== -1) {
+               result[matched]._delete = true;
+               currentIdx++;
+            }
+         } else if (op.type === '+') {
+            newBlocks.push(markdownLineToBlockDiff(op.text));
+         } else if (op.type === '+table') {
+            newBlocks.push(processTableDiff(op.lines));
+         } else if (op.type === ' ') {
+            currentIdx++;
+         }
+      }
+      result.splice(insertIndex, 0, ...newBlocks);
+  }
+
+  result = result.filter(b => !b._delete);
+  return result;
+}
+
 export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   debug(`Starting handleCanvasUpdate for ID: ${triggeredId}`);
 
@@ -1070,17 +1207,27 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     previousCanvasId = results[currentIdx + 1].id;
   }
 
-  let baseContent = "";
+  let baseBlocks: any[] = [];
   if (previousCanvasId) {
     debug(`Found previous canvas: ${previousCanvasId}`);
-    baseContent = await readPageContent(previousCanvasId);
+    let hasMoreBlocks = true;
+    let startCursorBlocks: string | undefined = undefined;
+    while (hasMoreBlocks) {
+      const listResponse = await notion.blocks.children.list({
+        block_id: previousCanvasId,
+        start_cursor: startCursorBlocks,
+      });
+      baseBlocks.push(...listResponse.results);
+      hasMoreBlocks = listResponse.has_more;
+      startCursorBlocks = listResponse.next_cursor ?? undefined;
+    }
   } else {
     debug(`No previous canvas found for project ${projectId}. Using empty content as base.`);
   }
 
-  // 3. Apply git diff to get merged content
-  const mergedContent = applyPatch(baseContent, diffContent);
-  debug(`Merged content lines: ${mergedContent.length}`);
+  // 3. Apply git diff to get merged blocks directly
+  const mergedBlocks = applyDiffToBlocks(baseBlocks, diffContent);
+  debug(`Merged blocks count: ${mergedBlocks.length}`);
 
   // 4. Overwrite current canvas page content
   let hasMore = true;
@@ -1106,13 +1253,26 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   }
   debug("Wiped clean all blocks inside canvas page");
 
+  // Clean read-only properties from Notion objects before appending
+  const cleanBlocks = mergedBlocks.map(b => {
+      const copy = { ...b };
+      delete copy.id;
+      delete copy.parent;
+      delete copy.created_time;
+      delete copy.created_by;
+      delete copy.last_edited_time;
+      delete copy.last_edited_by;
+      delete copy.has_children;
+      delete copy.archived;
+      return copy;
+  });
+
   // Write merged content as blocks
-  const blocks = markdownToRichNotionBlocks(mergedContent);
   const CHUNK = 100;
-  for (let i = 0; i < blocks.length; i += CHUNK) {
+  for (let i = 0; i < cleanBlocks.length; i += CHUNK) {
     await notion.blocks.children.append({
       block_id: canvasEntryId,
-      children: blocks.slice(i, i + CHUNK) as any,
+      children: cleanBlocks.slice(i, i + CHUNK) as any,
     });
   }
   debug(`Finished writing merged content back to canvas page ${canvasEntryId}`);
