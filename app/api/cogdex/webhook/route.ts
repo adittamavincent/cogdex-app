@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
   let payload: NotionAutomationPayload;
   try {
     payload = (await req.json()) as NotionAutomationPayload;
+    console.log("Received Notion webhook payload:", JSON.stringify(payload, null, 2));
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
