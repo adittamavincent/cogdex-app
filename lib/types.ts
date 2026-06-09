@@ -3,7 +3,8 @@ export type PageType =
   | "Response"
   | "Canvas"
   | "Compile"
-  | "Branch";
+  | "Branch"
+  | "Reset";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button

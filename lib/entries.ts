@@ -3,6 +3,7 @@ import { PageType } from "./types";
 import { debug, warn, error as logError } from "./logger";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
+const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
 
 interface NotionPage {
   properties?: Record<string, {
@@ -35,6 +36,7 @@ const TEMPLATES: Record<PageType, string> = {
   Canvas: "## Canvas\n\n",
   Compile: "", // filled by compile logic
   Branch: "",
+  Reset: "",
 };
 
 function findProperty(properties: Record<string, any>, name: string): any {
@@ -334,4 +336,125 @@ function markdownToNotionBlocks(md: string): Record<string, unknown>[] {
   }
 
   return blocks;
+}
+
+export async function relinkDatabases(thoughtId: string): Promise<void> {
+  debug(`Starting relinkDatabases for page ${thoughtId}`);
+
+  // 1. Wipe clean all blocks inside the current page
+  let hasMore = true;
+  let startCursor: string | undefined = undefined;
+
+  while (hasMore) {
+    const listResponse = await notion.blocks.children.list({
+      block_id: thoughtId,
+      start_cursor: startCursor,
+    });
+
+    if (listResponse.results.length > 0) {
+      await Promise.all(
+        listResponse.results.map((block) =>
+          notion.blocks.delete({ block_id: block.id })
+        )
+      );
+    }
+
+    hasMore = listResponse.has_more;
+    startCursor = listResponse.next_cursor ?? undefined;
+  }
+  debug("Wiped clean all blocks inside project page");
+
+  // 2. Resolve Branch DB ID
+  let branchDbId = process.env.NOTION_BRANCH_DB_ID;
+  if (!branchDbId) {
+    try {
+      const projectPage = await notion.pages.retrieve({ page_id: thoughtId });
+      if (projectPage && (projectPage as any).parent) {
+        let projectDbId = "";
+        const parent = (projectPage as any).parent;
+        if (parent.type === "database_id") {
+          projectDbId = parent.database_id;
+        } else if (parent.type === "data_source_id") {
+          projectDbId = parent.data_source_id;
+        }
+
+        if (projectDbId) {
+          const db = await notion.databases.retrieve({ database_id: projectDbId }) as any;
+          const branchProp = findProperty(db.properties, "Branch");
+          if (branchProp && branchProp.type === "relation" && branchProp.relation) {
+            const dbId = branchProp.relation.database_id || branchProp.relation.data_source_id;
+            if (dbId) {
+              branchDbId = dbId;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      warn("Could not dynamically resolve Branch DB ID:", err);
+    }
+  }
+
+  if (!branchDbId) {
+    branchDbId = "375bd597-c2f9-80cb-9055-f69d21f54170";
+  }
+
+  // 3. Create database views for Branch, Entry, and System Prompt
+  debug(`Creating Branch database view using data source ${branchDbId}`);
+  await notion.views.create({
+    data_source_id: branchDbId,
+    name: "Branch",
+    type: "table",
+    create_database: {
+      parent: {
+        type: "page_id",
+        page_id: thoughtId,
+      },
+    },
+    filter: {
+      property: "Project",
+      relation: {
+        contains: thoughtId,
+      },
+    },
+  } as any);
+
+  debug(`Creating Entry database view using data source ${ENTRY_DB_ID}`);
+  await notion.views.create({
+    data_source_id: ENTRY_DB_ID,
+    name: "Entry",
+    type: "table",
+    create_database: {
+      parent: {
+        type: "page_id",
+        page_id: thoughtId,
+      },
+    },
+    filter: {
+      property: "Project",
+      relation: {
+        contains: thoughtId,
+      },
+    },
+  } as any);
+
+  debug(`Creating System Prompt database view using data source ${SYSTEM_PROMPT_DB_ID}`);
+  await notion.views.create({
+    data_source_id: SYSTEM_PROMPT_DB_ID,
+    name: "System Prompt",
+    type: "table",
+    create_database: {
+      parent: {
+        type: "page_id",
+        page_id: thoughtId,
+      },
+    },
+    filter: {
+      property: "Include",
+      checkbox: {
+        equals: true,
+      },
+    },
+  } as any);
+
+  debug(`Successfully finished relinkDatabases for page ${thoughtId}`);
 }
