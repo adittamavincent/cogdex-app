@@ -143,8 +143,11 @@ export async function handleNewBranchClick(projectId: string) {
   
   await notion.pages.update({
     page_id: newestBranch.id,
-    properties: { Active: { checkbox: true } },
-    icon: (newestBranch.icon as any) || { type: "emoji", emoji: randomEmoji },
+    properties: { 
+      Active: { checkbox: true },
+      Name: { title: [] } // Remove title from created one
+    },
+    icon: { type: "emoji", emoji: randomEmoji }, // Add random icon
   });
 
   for (let i = 1; i < branches.length; i++) {
