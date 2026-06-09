@@ -32,9 +32,9 @@ const EMOJIS = [
 
 // Page body templates per Type
 const TEMPLATES: Record<PageType, string> = {
-  User: "## Intent\n\n\n## Brain Dump\n\n",
-  Response: "## LLM Response\n\n",
-  Canvas: "## Canvas\n\n",
+  User: "",
+  Response: "",
+  Canvas: "",
   Compile: "", // filled by compile logic
   Branch: "",
   "New Branch": "",
