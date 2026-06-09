@@ -39,8 +39,7 @@ const PROTOCOL = `
 ## Purpose
 This file is the handshake between Cogdex and the LLM.
 Each <entry> below is a structured context file with a type and chronological number.
-Types: User (intent/question), Response (LLM reply), Agreement (stable decisions),
-Checkpoint (global source of truth), Attachment (external reference).
+Types: User (intent/question), Response (LLM reply), Canvas (shared document/code/state).
 
 ## Rules
 1. Read entries in ascending number order.

@@ -1,9 +1,7 @@
 export type PageType =
   | "User"
   | "Response"
-  | "Agreement"
-  | "Checkpoint"
-  | "Attachment"
+  | "Canvas"
   | "Compile"
   | "Branch";
 

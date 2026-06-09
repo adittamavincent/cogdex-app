@@ -32,9 +32,7 @@ const EMOJIS = [
 const TEMPLATES: Record<PageType, string> = {
   User: "## Intent\n\n\n## Brain Dump\n\n",
   Response: "## LLM Response\n\n",
-  Agreement: "## Decisions\n\n\n## Definitions\n\n\n## Open Questions\n\n",
-  Checkpoint: "## Current State\n\n\n## Stable Context\n\n",
-  Attachment: "## Source\n\n\n## Notes\n\n",
+  Canvas: "## Canvas\n\n",
   Compile: "", // filled by compile logic
   Branch: "",
 };

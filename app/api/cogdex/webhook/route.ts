@@ -8,30 +8,33 @@ import { error as logError } from "@/lib/logger";
 export const runtime = "nodejs";
 
 const SECRET = process.env.COGDEX_WEBHOOK_SECRET!;
+const SECRET_HEADER = process.env.COGDEX_SECRET_HEADER || "x-cogdex-secret";
+const PAGE_TYPE_HEADER = process.env.COGDEX_PAGE_TYPE_HEADER || "x-cogdex-page-type";
 
 const VALID_PAGE_TYPES: PageType[] = [
   "User",
   "Response",
-  "Agreement",
-  "Checkpoint",
-  "Attachment",
+  "Canvas",
   "Compile",
   "Branch",
 ];
 
 export async function POST(req: NextRequest) {
   // --- Auth ---
-  const incomingSecret = req.headers.get("x-cogdex-secret");
-  if (incomingSecret !== SECRET) {
+  const incomingSecret =
+    req.headers.get(SECRET_HEADER) ||
+    req.headers.get("authorization")?.replace("Bearer ", "");
+
+  if (!SECRET || incomingSecret !== SECRET) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // --- Page type (from header — the only thing that differs per button) ---
-  const pageTypeHeader = req.headers.get("x-cogdex-page-type");
+  const pageTypeHeader = req.headers.get(PAGE_TYPE_HEADER);
   if (!pageTypeHeader || !VALID_PAGE_TYPES.includes(pageTypeHeader as PageType)) {
     return Response.json(
       {
-        error: `Invalid or missing x-cogdex-page-type header. Must be one of: ${VALID_PAGE_TYPES.join(", ")}`,
+        error: `Invalid or missing ${PAGE_TYPE_HEADER} header. Must be one of: ${VALID_PAGE_TYPES.join(", ")}`,
       },
       { status: 400 }
     );
