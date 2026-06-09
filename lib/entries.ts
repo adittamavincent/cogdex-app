@@ -188,25 +188,60 @@ export async function handleSetActiveClick(branchId: string) {
   }
 }
 
+
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
 }): Promise<{ pageId?: string; continueBranch?: boolean; ignored?: boolean }> {
   const { thoughtId, pageType } = params;
   const isCompile = pageType === "Compile";
-  let inheritedTitle = "";
-  let inheritedIcon: NotionPage["icon"] = undefined;
   const resolvedBranchDbId = await getBranchDbId(thoughtId);
 
+  // 1. Find targetEntryId if Notion button already created it
+  let targetEntryId: string | undefined;
+  if (pageType !== "Canvas") {
+    const recentResponse = await notion.dataSources.query({
+      data_source_id: ENTRY_DB_ID,
+      filter: {
+        and: [
+          { property: "Project", relation: { contains: thoughtId } },
+          { property: "Type", select: { equals: pageType } }
+        ]
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 1
+    });
+    if (recentResponse.results.length > 0) {
+      targetEntryId = (recentResponse.results[0] as any).id;
+      debug(`Found existing entry created by Notion: ${targetEntryId}`);
+    }
+  }
+
+  // 2. Resolve Active Branch
   const branches = await getBranchesForProject(thoughtId, resolvedBranchDbId);
   const activeBranch = branches.find(b => findProperty(b.properties || {}, "Active")?.checkbox);
   let linkedBranchId: string | undefined = activeBranch?.id;
+  let inheritedTitle = "";
+  let inheritedIcon: NotionPage["icon"] = undefined;
 
   if (activeBranch) {
     inheritedIcon = activeBranch.icon;
-    const latest = await getLatestEntry(thoughtId);
-    if (latest && latest.properties) {
-      const nameProp = findProperty(latest.properties, "Name");
+    
+    // Find latest entry in this branch to inherit title (excluding the one we just found)
+    const latestResponse = await notion.dataSources.query({
+      data_source_id: ENTRY_DB_ID,
+      filter: {
+        and: [
+          { property: "Branch", relation: { contains: activeBranch.id } }
+        ]
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 2
+    });
+    
+    const validEntries = latestResponse.results.filter((r: any) => r.id !== targetEntryId);
+    if (validEntries.length > 0) {
+      const nameProp = findProperty((validEntries[0] as any).properties || {}, "Name");
       inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
     }
   } else {
@@ -236,6 +271,7 @@ export async function createEntry(params: {
     }
   }
 
+  // 3. Handle Canvas Logic
   if (pageType === "Canvas" && linkedBranchId) {
     const existingCanvasResponse = await notion.dataSources.query({
       data_source_id: ENTRY_DB_ID,
@@ -253,8 +289,9 @@ export async function createEntry(params: {
     }
   }
 
+  // 4. Update or Create Entry
   const properties: Record<string, unknown> = {
-    Name: { title: [{ text: { content: inheritedTitle } }] },
+    Name: { title: inheritedTitle ? [{ text: { content: inheritedTitle } }] : [] },
     Type: { select: { name: pageType } },
     Include: { checkbox: true },
     Project: { relation: [{ id: thoughtId }] },
@@ -264,16 +301,32 @@ export async function createEntry(params: {
     properties.Branch = { relation: [{ id: linkedBranchId }] };
   }
 
-  const createPayload: any = {
-    parent: { data_source_id: ENTRY_DB_ID },
-    properties,
-    children: (!isCompile && pageType !== "Branch" && pageType !== "New Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [],
-  };
+  const blocksToAppend = (!isCompile && pageType !== "Branch" && pageType !== "New Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [];
 
-  if (inheritedIcon) createPayload.icon = inheritedIcon;
+  if (targetEntryId) {
+    await notion.pages.update({
+      page_id: targetEntryId,
+      properties: properties as any,
+      icon: (inheritedIcon as any) || undefined
+    });
+    if (blocksToAppend.length > 0) {
+      await notion.blocks.children.append({
+        block_id: targetEntryId,
+        children: blocksToAppend as any
+      });
+    }
+    return { pageId: targetEntryId, continueBranch: true };
+  } else {
+    const createPayload: any = {
+      parent: { data_source_id: ENTRY_DB_ID },
+      properties,
+      children: blocksToAppend,
+    };
+    if (inheritedIcon) createPayload.icon = inheritedIcon;
 
-  const page = await notion.pages.create(createPayload);
-  return { pageId: page.id, continueBranch: true };
+    const page = await notion.pages.create(createPayload);
+    return { pageId: page.id, continueBranch: true };
+  }
 }
 
 // Minimal markdown-to-Notion-blocks converter for templates.
