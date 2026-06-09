@@ -102,8 +102,8 @@ async function getIncludedSystemPrompts() {
   return response.results as unknown as NotionPage[];
 }
 
-// Build the full XML context string
-async function buildXML(thoughtId: string): Promise<string> {
+// Build the full XML context string and return the involved entry/prompt IDs
+async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
   const [entries, prompts] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
@@ -137,7 +137,11 @@ async function buildXML(thoughtId: string): Promise<string> {
   lines.push("");
   lines.push("</cogdex>");
 
-  return lines.join("\n");
+  return {
+    xml: lines.join("\n"),
+    entryIds: entries.map((e) => e.id),
+    promptIds: prompts.map((p) => p.id),
+  };
 }
 
 // Convert plain XML string into grouped Notion paragraph blocks.
@@ -199,10 +203,15 @@ function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
 }
 
 export async function compileAndCreate(thoughtId: string): Promise<void> {
-  const xml = await buildXML(thoughtId);
+  const { xml, entryIds, promptIds } = await buildXML(thoughtId);
 
   // Create the Compile entry page (Number = null)
-  const { pageId } = await createEntry({ thoughtId, pageType: "Compile" });
+  const { pageId } = await createEntry({
+    thoughtId,
+    pageType: "Compile",
+    entriesReferencedIds: entryIds,
+    systemPromptsUsedIds: promptIds,
+  });
 
   // Write XML as paragraph blocks to the new page.
   // Notion has a 100-blocks-per-append limit — chunk to stay within it.

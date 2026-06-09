@@ -194,6 +194,8 @@ export async function handleSetActiveClick(branchId: string) {
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
+  entriesReferencedIds?: string[];
+  systemPromptsUsedIds?: string[];
 }): Promise<{ pageId?: string; continueBranch?: boolean; ignored?: boolean }> {
   const { thoughtId, pageType } = params;
   const isCompile = pageType === "Compile";
@@ -297,6 +299,18 @@ export async function createEntry(params: {
 
   if (linkedBranchId) {
     properties.Branch = { relation: [{ id: linkedBranchId }] };
+  }
+
+  if (params.entriesReferencedIds && params.entriesReferencedIds.length > 0) {
+    properties["Entries Referenced"] = {
+      relation: params.entriesReferencedIds.map((id) => ({ id })),
+    };
+  }
+
+  if (params.systemPromptsUsedIds && params.systemPromptsUsedIds.length > 0) {
+    properties["System Prompt Used"] = {
+      relation: params.systemPromptsUsedIds.map((id) => ({ id })),
+    };
   }
 
   const blocksToAppend = (!isCompile && pageType !== "Branch" && pageType !== "New Branch") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [];
