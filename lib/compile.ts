@@ -100,22 +100,12 @@ async function getIncludedEntries(thoughtId: string) {
 
   const entries = response.results as unknown as NotionPage[];
 
-  // Sort: entries with Number first (ascending), then null-Number by created_time
+  // Sort: entries by created_time ascending
   return entries.sort((a, b) => {
-    const na: number | null = a.properties?.Number?.number ?? null;
-    const nb: number | null = b.properties?.Number?.number ?? null;
-    if (na !== null && nb !== null) {
-      if (na !== nb) return na - nb;
-      // Same number → sort by created_time (branch ordering)
-      return new Date(a.created_time).getTime() - new Date(b.created_time).getTime();
-    }
-    if (na !== null) return -1;
-    if (nb !== null) return 1;
     return (
       new Date(a.created_time).getTime() - new Date(b.created_time).getTime()
     );
   });
-
 }
 
 // Fetch all Include=true system prompts, sorted by Priority
@@ -168,7 +158,7 @@ async function buildXML(thoughtId: string): Promise<string> {
   lines.push("<context>");
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const number = entry.properties?.Number?.number ?? "?";
+    const number = i + 1;
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
     const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     const content = entryContents[i];

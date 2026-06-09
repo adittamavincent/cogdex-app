@@ -86,7 +86,7 @@ export async function getContinueBranch(thoughtId: string): Promise<boolean> {
   return isChecked;
 }
 
-// Returns the entry row with the highest Number for this project (excluding Compile)
+// Returns the entry row sorted by created_time descending for this project (excluding Compile)
 export async function getLatestEntry(thoughtId: string): Promise<NotionPage | null> {
   const response = await notion.dataSources.query({
     data_source_id: ENTRY_DB_ID,
@@ -98,7 +98,7 @@ export async function getLatestEntry(thoughtId: string): Promise<NotionPage | nu
     },
     sorts: [
       {
-        property: "Number",
+        timestamp: "created_time",
         direction: "descending",
       },
     ],
@@ -109,27 +109,10 @@ export async function getLatestEntry(thoughtId: string): Promise<NotionPage | nu
   return response.results[0] as unknown as NotionPage;
 }
 
-// Returns max(Number) across non-Compile entries for this project
-export async function getMaxNumber(thoughtId: string): Promise<number> {
-  const latest = await getLatestEntry(thoughtId);
-  return latest?.properties?.Number?.number ?? 0;
-}
-
-// Returns the number to assign to a new entry (always increments by one: max + 1)
-export async function resolveNumber(
-  thoughtId: string
-): Promise<{ number: number; max: number }> {
-  const max = await getMaxNumber(thoughtId);
-  return {
-    number: max + 1,
-    max,
-  };
-}
-
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
-}): Promise<{ pageId: string; number: number | null; continueBranch: boolean; max: number }> {
+}): Promise<{ pageId: string; continueBranch: boolean }> {
   const { thoughtId, pageType } = params;
 
   const isCompile = pageType === "Compile";
@@ -288,16 +271,6 @@ export async function createEntry(params: {
     }
   }
 
-  // --- Number resolution ---
-  let number: number | null = null;
-  let max = 0;
-  if (!isCompile && pageType !== "Branch") {
-    const resolved = await resolveNumber(thoughtId);
-    number = resolved.number;
-    max = resolved.max;
-  }
-  debug(`Resolved number to assign:`, number, `(max was: ${max})`);
-
   // --- Build properties ---
   const properties: Record<string, unknown> = {
     Name: {
@@ -307,10 +280,6 @@ export async function createEntry(params: {
     Include: { checkbox: true },
     Project: { relation: [{ id: thoughtId }] },
   };
-
-  if (number !== null) {
-    properties.Number = { number };
-  }
 
   if (linkedBranchId) {
     properties.Branch = { relation: [{ id: linkedBranchId }] };
@@ -335,7 +304,7 @@ export async function createEntry(params: {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const page = await notion.pages.create(createPayload as any);
-  return { pageId: page.id, number, continueBranch, max };
+  return { pageId: page.id, continueBranch };
 }
 
 // Minimal markdown-to-Notion-blocks converter for templates.

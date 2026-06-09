@@ -48,6 +48,11 @@ export async function POST(req: NextRequest) {
   let payload: NotionAutomationPayload;
   try {
     payload = (await req.json()) as NotionAutomationPayload;
+    const headersObj: Record<string, string> = {};
+    req.headers.forEach((v, k) => {
+      headersObj[k] = v;
+    });
+    console.log("Received Notion webhook headers:", JSON.stringify(headersObj, null, 2));
     console.log("Received Notion webhook payload:", JSON.stringify(payload, null, 2));
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
