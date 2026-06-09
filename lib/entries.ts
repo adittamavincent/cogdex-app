@@ -426,7 +426,25 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     const name = originalView.name || "View";
     const type = originalView.type || "table";
     const sorts = originalView.sorts || undefined;
-    const configuration = originalView.configuration || undefined;
+    
+    let configuration = originalView.configuration || undefined;
+    try {
+      debug(`Retrieving actual schema for data source ${dataSourceId} to sanitize property configurations`);
+      const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId }) as any;
+      const validPropertyIds = new Set([
+        "title",
+        ...Object.values(db.properties).map((prop: any) => prop.id),
+      ]);
+
+      if (configuration && configuration.properties && Array.isArray(configuration.properties)) {
+        configuration.properties = configuration.properties.filter(
+          (p: any) => p.property_id && validPropertyIds.has(p.property_id)
+        );
+        debug(`Sanitized properties list: kept ${configuration.properties.length} valid properties`);
+      }
+    } catch (schemaErr) {
+      warn(`Could not retrieve schema for data source ${dataSourceId} to sanitize configuration:`, schemaErr);
+    }
 
     let filter = originalView.filter || undefined;
     if (modifyFilter) {
