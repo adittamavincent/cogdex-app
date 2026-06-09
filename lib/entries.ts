@@ -341,7 +341,25 @@ function markdownToNotionBlocks(md: string): Record<string, unknown>[] {
 export async function relinkDatabases(thoughtId: string): Promise<void> {
   debug(`Starting relinkDatabases for page ${thoughtId}`);
 
-  // 1. Wipe clean all blocks inside the current page
+  // 1. Fetch original view configurations to clone sorting/ordering/formatting
+  const ORIGINAL_BRANCH_VIEW_ID = process.env.NOTION_BRANCH_VIEW_ID;
+  const ORIGINAL_ENTRY_VIEW_ID = process.env.NOTION_ENTRY_VIEW_ID;
+  const ORIGINAL_SYSTEM_PROMPT_VIEW_ID = process.env.NOTION_SYSTEM_PROMPT_VIEW_ID;
+
+  if (!ORIGINAL_BRANCH_VIEW_ID || !ORIGINAL_ENTRY_VIEW_ID || !ORIGINAL_SYSTEM_PROMPT_VIEW_ID) {
+    throw new Error(
+      "Missing required view ID environment variables: NOTION_BRANCH_VIEW_ID, NOTION_ENTRY_VIEW_ID, NOTION_SYSTEM_PROMPT_VIEW_ID"
+    );
+  }
+
+  debug(`Fetching original views: Branch=${ORIGINAL_BRANCH_VIEW_ID}, Entry=${ORIGINAL_ENTRY_VIEW_ID}, SystemPrompt=${ORIGINAL_SYSTEM_PROMPT_VIEW_ID}`);
+  const [branchView, entryView, systemPromptView] = await Promise.all([
+    notion.views.retrieve({ view_id: ORIGINAL_BRANCH_VIEW_ID }),
+    notion.views.retrieve({ view_id: ORIGINAL_ENTRY_VIEW_ID }),
+    notion.views.retrieve({ view_id: ORIGINAL_SYSTEM_PROMPT_VIEW_ID }),
+  ]);
+
+  // 2. Wipe clean all blocks inside the current page
   let hasMore = true;
   let startCursor: string | undefined = undefined;
 
@@ -364,7 +382,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
   }
   debug("Wiped clean all blocks inside project page");
 
-  // 2. Resolve Branch DB ID
+  // 3. Resolve Branch DB ID for fallback
   let branchDbId = process.env.NOTION_BRANCH_DB_ID;
   if (!branchDbId) {
     try {
@@ -398,63 +416,67 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     branchDbId = "375bd597-c2f9-80cb-9055-f69d21f54170";
   }
 
-  // 3. Create database views for Branch, Entry, and System Prompt
-  debug(`Creating Branch database view using data source ${branchDbId}`);
-  await notion.views.create({
-    data_source_id: branchDbId,
-    name: "Branch",
-    type: "table",
-    create_database: {
-      parent: {
-        type: "page_id",
-        page_id: thoughtId,
+  // 4. Helper to create view cloned from original
+  const createClonedView = async (
+    originalView: any,
+    fallbackDataSourceId: string,
+    modifyFilter?: (filter: any) => any
+  ) => {
+    const dataSourceId = originalView.data_source_id || fallbackDataSourceId;
+    const name = originalView.name || "View";
+    const type = originalView.type || "table";
+    const sorts = originalView.sorts || undefined;
+    const configuration = originalView.configuration || undefined;
+
+    let filter = originalView.filter || undefined;
+    if (modifyFilter) {
+      filter = modifyFilter(filter);
+    }
+
+    await notion.views.create({
+      data_source_id: dataSourceId,
+      name,
+      type,
+      create_database: {
+        parent: {
+          type: "page_id",
+          page_id: thoughtId,
+        },
       },
-    },
-    filter: {
+      filter,
+      sorts,
+      configuration,
+    } as any);
+  };
+
+  // Modifier to enforce scoping to current project
+  const projectFilterModifier = (origFilter: any) => {
+    const projectFilter = {
       property: "Project",
       relation: {
         contains: thoughtId,
       },
-    },
-  } as any);
+    };
+    if (!origFilter) {
+      return projectFilter;
+    }
+    return {
+      and: [
+        projectFilter,
+        origFilter,
+      ],
+    };
+  };
 
-  debug(`Creating Entry database view using data source ${ENTRY_DB_ID}`);
-  await notion.views.create({
-    data_source_id: ENTRY_DB_ID,
-    name: "Entry",
-    type: "table",
-    create_database: {
-      parent: {
-        type: "page_id",
-        page_id: thoughtId,
-      },
-    },
-    filter: {
-      property: "Project",
-      relation: {
-        contains: thoughtId,
-      },
-    },
-  } as any);
+  // 5. Create the cloned views sequentially
+  debug("Creating cloned Branch database view");
+  await createClonedView(branchView, branchDbId, projectFilterModifier);
 
-  debug(`Creating System Prompt database view using data source ${SYSTEM_PROMPT_DB_ID}`);
-  await notion.views.create({
-    data_source_id: SYSTEM_PROMPT_DB_ID,
-    name: "System Prompt",
-    type: "table",
-    create_database: {
-      parent: {
-        type: "page_id",
-        page_id: thoughtId,
-      },
-    },
-    filter: {
-      property: "Include",
-      checkbox: {
-        equals: true,
-      },
-    },
-  } as any);
+  debug("Creating cloned Entry database view");
+  await createClonedView(entryView, ENTRY_DB_ID, projectFilterModifier);
+
+  debug("Creating cloned System Prompt database view");
+  await createClonedView(systemPromptView, SYSTEM_PROMPT_DB_ID);
 
   debug(`Successfully finished relinkDatabases for page ${thoughtId}`);
 }
