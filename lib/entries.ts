@@ -1,6 +1,7 @@
 import { notion } from "./notion";
 import { PageType } from "./types";
 import { debug, warn, error as logError } from "./logger";
+import { readPageContent } from "./compile";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
@@ -35,6 +36,7 @@ const TEMPLATES: Record<PageType, string> = {
   User: "",
   Response: "",
   Canvas: "",
+  "Canvas Update": "",
   Compile: "", // filled by compile logic
   Branch: "",
   "New Branch": "",
@@ -199,20 +201,31 @@ export async function createEntry(params: {
 
   // 1. Find targetEntryId if Notion button already created it
   let targetEntryId: string | undefined;
-  if (pageType !== "Canvas") {
-    const recentResponse = await notion.dataSources.query({
-      data_source_id: ENTRY_DB_ID,
-      filter: {
-        and: [
-          { property: "Project", relation: { contains: thoughtId } },
-          { property: "Type", select: { equals: pageType } }
-        ]
-      },
-      sorts: [{ timestamp: "created_time", direction: "descending" }],
-      page_size: 1
-    });
-    if (recentResponse.results.length > 0) {
-      targetEntryId = (recentResponse.results[0] as any).id;
+  const recentResponse = await notion.dataSources.query({
+    data_source_id: ENTRY_DB_ID,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: thoughtId } },
+        { property: "Type", select: { equals: pageType } }
+      ]
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 1
+  });
+
+  if (recentResponse.results.length > 0) {
+    const recentPage = recentResponse.results[0] as any;
+    if (pageType === "Canvas") {
+      // For multiple Canvas entries, only reuse the page if it was created very recently (within 5 minutes)
+      const createdTime = new Date(recentPage.created_time);
+      const now = new Date();
+      const diffMs = Math.abs(now.getTime() - createdTime.getTime());
+      if (diffMs < 5 * 60 * 1000) {
+        targetEntryId = recentPage.id;
+        debug(`Found existing Canvas entry created by Notion: ${targetEntryId}`);
+      }
+    } else {
+      targetEntryId = recentPage.id;
       debug(`Found existing entry created by Notion: ${targetEntryId}`);
     }
   }
@@ -272,22 +285,7 @@ export async function createEntry(params: {
   }
 
   // 3. Handle Canvas Logic
-  if (pageType === "Canvas" && linkedBranchId) {
-    const existingCanvasResponse = await notion.dataSources.query({
-      data_source_id: ENTRY_DB_ID,
-      filter: {
-        and: [
-          { property: "Branch", relation: { contains: linkedBranchId } },
-          { property: "Type", select: { equals: "Canvas" } }
-        ]
-      },
-      page_size: 1
-    });
-    if (existingCanvasResponse.results.length > 0) {
-      debug(`Canvas already exists in branch ${linkedBranchId}, ignoring`);
-      return { ignored: true };
-    }
-  }
+  // We no longer restrict one Canvas per branch for versioning.
 
   // 4. Update or Create Entry
   const properties: Record<string, unknown> = {
@@ -528,4 +526,349 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
   await createClonedView(systemPromptView, SYSTEM_PROMPT_DB_ID);
 
   debug(`Successfully finished relinkDatabases for page ${thoughtId}`);
+}
+
+export function isDiff(content: string): boolean {
+  if (/^@@\s+-\d+.*\+\d+.*@@/m.test(content)) {
+    return true;
+  }
+  const lines = content.split("\n");
+  let diffIndicators = 0;
+  for (const line of lines) {
+    if (line.startsWith("+") || line.startsWith("-")) {
+      diffIndicators++;
+    }
+  }
+  return diffIndicators > 0 || content.includes("--- ") || content.includes("+++ ");
+}
+
+interface Hunk {
+  oldStart: number;
+  oldLength: number;
+  newStart: number;
+  newLength: number;
+  lines: string[];
+}
+
+export function parseDiff(diffText: string): Hunk[] {
+  let content = diffText;
+  const match = diffText.match(/```(?:diff)?\n([\s\S]*?)```/);
+  if (match) {
+    content = match[1];
+  }
+
+  const lines = content.split(/\r?\n/);
+  const hunks: Hunk[] = [];
+  let currentHunk: Hunk | null = null;
+
+  for (const line of lines) {
+    const hunkHeaderMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+    if (hunkHeaderMatch) {
+      if (currentHunk) {
+        while (currentHunk.lines.length > 0 && currentHunk.lines[currentHunk.lines.length - 1].trim() === "") {
+          currentHunk.lines.pop();
+        }
+        hunks.push(currentHunk);
+      }
+      currentHunk = {
+        oldStart: parseInt(hunkHeaderMatch[1], 10),
+        oldLength: hunkHeaderMatch[2] ? parseInt(hunkHeaderMatch[2], 10) : 1,
+        newStart: parseInt(hunkHeaderMatch[3], 10),
+        newLength: hunkHeaderMatch[4] ? parseInt(hunkHeaderMatch[4], 10) : 1,
+        lines: [],
+      };
+    } else if (currentHunk) {
+      if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line === "" || line.startsWith("\\")) {
+        currentHunk.lines.push(line);
+      } else {
+        if (!line.startsWith("diff ") && !line.startsWith("--- ") && !line.startsWith("+++ ")) {
+          currentHunk.lines.push(" " + line);
+        }
+      }
+    }
+  }
+  if (currentHunk) {
+    while (currentHunk.lines.length > 0 && currentHunk.lines[currentHunk.lines.length - 1].trim() === "") {
+      currentHunk.lines.pop();
+    }
+    hunks.push(currentHunk);
+  }
+  return hunks;
+}
+
+function matchLines(baseLines: string[], startIdx: number, searchLines: string[]): boolean {
+  for (let i = 0; i < searchLines.length; i++) {
+    if (baseLines[startIdx + i].trim() !== searchLines[i].trim()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function applyPatch(baseText: string, patchText: string): string {
+  const hunks = parseDiff(patchText);
+  if (hunks.length === 0) {
+    return patchText;
+  }
+
+  const baseLines = baseText.split(/\r?\n/);
+  const sortedHunks = [...hunks].sort((a, b) => b.oldStart - a.oldStart);
+
+  for (const hunk of sortedHunks) {
+    const searchLines: string[] = [];
+    const replaceLines: string[] = [];
+
+    for (const line of hunk.lines) {
+      if (line.startsWith("-")) {
+        searchLines.push(line.slice(1));
+      } else if (line.startsWith("+")) {
+        replaceLines.push(line.slice(1));
+      } else if (line.startsWith(" ")) {
+        searchLines.push(line.slice(1));
+        replaceLines.push(line.slice(1));
+      } else if (line.startsWith("\\")) {
+        // Ignore
+      } else {
+        searchLines.push(line);
+        replaceLines.push(line);
+      }
+    }
+
+    const hintIndex = Math.max(0, hunk.oldStart - 1);
+    let foundIndex = -1;
+    const maxOffset = Math.max(baseLines.length, 100);
+
+    for (let offset = 0; offset < maxOffset; offset++) {
+      const idxForward = hintIndex + offset;
+      if (idxForward + searchLines.length <= baseLines.length) {
+        if (matchLines(baseLines, idxForward, searchLines)) {
+          foundIndex = idxForward;
+          break;
+        }
+      }
+      const idxBackward = hintIndex - offset;
+      if (offset > 0 && idxBackward >= 0 && idxBackward + searchLines.length <= baseLines.length) {
+        if (matchLines(baseLines, idxBackward, searchLines)) {
+          foundIndex = idxBackward;
+          break;
+        }
+      }
+    }
+
+    if (foundIndex === -1) {
+      let startTrim = 0;
+      while (startTrim < searchLines.length && hunk.lines[startTrim]?.startsWith(" ")) {
+        startTrim++;
+      }
+      let endTrim = 0;
+      while (endTrim < searchLines.length && hunk.lines[hunk.lines.length - 1 - endTrim]?.startsWith(" ")) {
+        endTrim++;
+      }
+
+      const trimmedSearch = searchLines.slice(startTrim, searchLines.length - endTrim);
+      const trimmedReplace = replaceLines.slice(startTrim, replaceLines.length - endTrim);
+
+      if (trimmedSearch.length > 0) {
+        for (let offset = 0; offset < maxOffset; offset++) {
+          const idxForward = hintIndex + offset;
+          if (idxForward + trimmedSearch.length <= baseLines.length) {
+            if (matchLines(baseLines, idxForward, trimmedSearch)) {
+              foundIndex = idxForward - startTrim;
+              break;
+            }
+          }
+          const idxBackward = hintIndex - offset;
+          if (offset > 0 && idxBackward >= 0 && idxBackward + trimmedSearch.length <= baseLines.length) {
+            if (matchLines(baseLines, idxBackward, trimmedSearch)) {
+              foundIndex = idxBackward - startTrim;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (foundIndex !== -1) {
+      baseLines.splice(foundIndex, searchLines.length, ...replaceLines);
+    } else {
+      if (baseText.trim() === "") {
+        return replaceLines.join("\n");
+      }
+      warn(`Could not apply hunk starting at line ${hunk.oldStart}`);
+    }
+  }
+
+  return baseLines.join("\n");
+}
+
+export function textToNotionBlocks(text: string): Record<string, unknown>[] {
+  const lines = text.split(/\r?\n/);
+  const blocks: Record<string, unknown>[] = [];
+  let currentChunk: string[] = [];
+  let currentLength = 0;
+
+  for (const line of lines) {
+    if (currentLength + line.length + 1 > 1900) {
+      if (currentChunk.length > 0) {
+        blocks.push({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
+          },
+        });
+        currentChunk = [];
+        currentLength = 0;
+      }
+    }
+
+    if (line.length > 1900) {
+      let remaining = line;
+      while (remaining.length > 0) {
+        const piece = remaining.slice(0, 1900);
+        blocks.push({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: piece } }],
+          },
+        });
+        remaining = remaining.slice(1900);
+      }
+    } else {
+      currentChunk.push(line);
+      currentLength += line.length + 1;
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    blocks.push({
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
+      },
+    });
+  }
+
+  return blocks;
+}
+
+export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
+  debug(`Starting handleCanvasUpdate for ID: ${triggeredId}`);
+
+  // Retrieve the page from Notion
+  const pageObj = await notion.pages.retrieve({ page_id: triggeredId }) as any;
+  if (!pageObj) {
+    throw new Error(`Page with ID ${triggeredId} not found.`);
+  }
+
+  let canvasEntryId = "";
+  let projectId = "";
+
+  const parentId = pageObj.parent.database_id || pageObj.parent.data_source_id;
+
+  if (parentId === ENTRY_DB_ID) {
+    debug(`Triggered page ${triggeredId} is a Canvas Entry`);
+    canvasEntryId = triggeredId;
+    const projectProp = findProperty(pageObj.properties || {}, "Project");
+    projectId = projectProp?.relation?.[0]?.id;
+    if (!projectId) {
+      throw new Error(`Canvas Entry ${triggeredId} is not linked to any Project.`);
+    }
+  } else {
+    debug(`Triggered page ${triggeredId} is a Project page, searching for latest Canvas Entry`);
+    projectId = triggeredId;
+    const canvasPagesResponse = await notion.dataSources.query({
+      data_source_id: ENTRY_DB_ID,
+      filter: {
+        and: [
+          { property: "Project", relation: { contains: projectId } },
+          { property: "Type", select: { equals: "Canvas" } }
+        ]
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 1
+    });
+
+    if (canvasPagesResponse.results.length === 0) {
+      throw new Error(`No Canvas entry found for project ${projectId}.`);
+    }
+    canvasEntryId = canvasPagesResponse.results[0].id;
+  }
+
+  // 1. Read diff content from target canvas page
+  const diffContent = await readPageContent(canvasEntryId);
+  debug(`Read diff content from canvas ${canvasEntryId} (length: ${diffContent.length})`);
+
+  if (!isDiff(diffContent)) {
+    debug(`Content is not a git diff. Skipping merge update.`);
+    return;
+  }
+
+  // 2. Find previous canvas page in this project
+  const canvasPagesResponse = await notion.dataSources.query({
+    data_source_id: ENTRY_DB_ID,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: projectId } },
+        { property: "Type", select: { equals: "Canvas" } }
+      ]
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }]
+  });
+
+  const results = canvasPagesResponse.results;
+  const currentIdx = results.findIndex(r => r.id === canvasEntryId);
+  let previousCanvasId: string | null = null;
+  if (currentIdx !== -1 && currentIdx + 1 < results.length) {
+    previousCanvasId = results[currentIdx + 1].id;
+  }
+
+  let baseContent = "";
+  if (previousCanvasId) {
+    debug(`Found previous canvas: ${previousCanvasId}`);
+    baseContent = await readPageContent(previousCanvasId);
+  } else {
+    debug(`No previous canvas found for project ${projectId}. Using empty content as base.`);
+  }
+
+  // 3. Apply git diff to get merged content
+  const mergedContent = applyPatch(baseContent, diffContent);
+  debug(`Merged content length: ${mergedContent.length}`);
+
+  // 4. Overwrite current canvas page content
+  let hasMore = true;
+  let startCursor: string | undefined = undefined;
+
+  // Clear existing blocks
+  while (hasMore) {
+    const listResponse = await notion.blocks.children.list({
+      block_id: canvasEntryId,
+      start_cursor: startCursor,
+    });
+
+    if (listResponse.results.length > 0) {
+      await Promise.all(
+        listResponse.results.map((block) =>
+          notion.blocks.delete({ block_id: block.id })
+        )
+      );
+    }
+
+    hasMore = listResponse.has_more;
+    startCursor = listResponse.next_cursor ?? undefined;
+  }
+  debug("Wiped clean all blocks inside canvas page");
+
+  // Write merged content as blocks
+  const blocks = textToNotionBlocks(mergedContent);
+  const CHUNK = 100;
+  for (let i = 0; i < blocks.length; i += CHUNK) {
+    await notion.blocks.children.append({
+      block_id: canvasEntryId,
+      children: blocks.slice(i, i + CHUNK) as any,
+    });
+  }
+  debug(`Finished writing merged content back to canvas page ${canvasEntryId}`);
 }

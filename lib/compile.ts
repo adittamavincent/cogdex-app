@@ -33,7 +33,7 @@ interface NotionPage {
 }
 
 // Read all text content from a Notion page (recursive blocks → plain text)
-async function readPageContent(pageId: string): Promise<string> {
+export async function readPageContent(pageId: string): Promise<string> {
   // SDK v5: blocks.children.list is unchanged
   const blocks = await notion.blocks.children.list({ block_id: pageId });
   const lines: string[] = [];

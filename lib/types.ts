@@ -2,6 +2,7 @@ export type PageType =
   | "User"
   | "Response"
   | "Canvas"
+  | "Canvas Update"
   | "Compile"
   | "Branch"
   | "New Branch"

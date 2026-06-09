@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry, relinkDatabases, handleNewBranchClick, handleSetActiveClick } from "@/lib/entries";
+import { createEntry, relinkDatabases, handleNewBranchClick, handleSetActiveClick, handleCanvasUpdate } from "@/lib/entries";
 import { compileAndCreate } from "@/lib/compile";
 import { error as logError } from "@/lib/logger";
 
@@ -15,6 +15,7 @@ const VALID_PAGE_TYPES: PageType[] = [
   "User",
   "Response",
   "Canvas",
+  "Canvas Update",
   "Compile",
   "Branch",
   "New Branch",
@@ -88,6 +89,11 @@ export async function POST(req: NextRequest) {
 
     if (pageType === "Reset") {
       await relinkDatabases(thoughtId);
+      return Response.json({ ok: true });
+    }
+
+    if (pageType === "Canvas Update") {
+      await handleCanvasUpdate(thoughtId);
       return Response.json({ ok: true });
     }
 
