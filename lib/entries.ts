@@ -793,6 +793,57 @@ function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "
   return richText;
 }
 
+function buildTableBlock(lines: Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown> {
+  const rows = lines.map(l => {
+    const cells = l.text.trim().split("|").slice(1, -1).map(c => c.trim());
+    return { cells, type: l.type };
+  });
+
+  let hasHeader = false;
+  let dataRows = rows;
+  
+  if (rows.length >= 2) {
+    const isSeparator = rows[1].cells.every(c => c.replace(/-/g, "").trim() === "");
+    if (isSeparator) {
+      hasHeader = true;
+      dataRows = [rows[0], ...rows.slice(2)];
+    }
+  }
+
+  if (dataRows.length > 100) {
+    dataRows = dataRows.slice(0, 100);
+  }
+
+  const tableWidth = Math.max(...dataRows.map(r => r.cells.length), 1);
+
+  const tableRows = dataRows.map(row => {
+    let cells = row.cells;
+    if (cells.length < tableWidth) {
+      cells = [...cells, ...Array(tableWidth - cells.length).fill("")];
+    } else if (cells.length > tableWidth) {
+      cells = cells.slice(0, tableWidth);
+    }
+
+    return {
+      type: "table_row",
+      table_row: {
+        cells: cells.map(c => splitTextIntoRichText(c, row.type === "added"))
+      }
+    };
+  });
+
+  return {
+    object: "block",
+    type: "table",
+    table: {
+      table_width: tableWidth,
+      has_column_header: hasHeader,
+      has_row_header: false,
+      children: tableRows
+    }
+  };
+}
+
 export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown>[] {
   const lines = typeof linesInput === "string"
     ? linesInput.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }))
@@ -803,6 +854,9 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
   let codeBlockLines: Array<{ text: string, type: "normal" | "added" }> = [];
   let codeLanguage = "plain text";
   let codeFenceLength = 3;
+
+  let inTable = false;
+  let tableLines: Array<{ text: string, type: "normal" | "added" }> = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -828,9 +882,32 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
 
     const codeStartMatch = line.text.match(/^(`{3,})(.*)$/);
     if (codeStartMatch) {
+      if (inTable) {
+        blocks.push(buildTableBlock(tableLines));
+        inTable = false;
+        tableLines = [];
+      }
       inCodeBlock = true;
       codeFenceLength = codeStartMatch[1].length;
       codeLanguage = getNotionLanguage(codeStartMatch[2]);
+      continue;
+    }
+
+    const trimmedText = line.text.trim();
+    const isTableLine = trimmedText.startsWith("|") && trimmedText.endsWith("|");
+
+    if (inTable) {
+      if (isTableLine) {
+        tableLines.push(line);
+        continue;
+      } else {
+        blocks.push(buildTableBlock(tableLines));
+        inTable = false;
+        tableLines = [];
+      }
+    } else if (isTableLine) {
+      inTable = true;
+      tableLines.push(line);
       continue;
     }
 
@@ -900,6 +977,10 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
         rich_text: splitTextIntoRichText(line.text, line.type === "added"),
       },
     });
+  }
+
+  if (inTable) {
+    blocks.push(buildTableBlock(tableLines));
   }
 
   if (inCodeBlock) {
