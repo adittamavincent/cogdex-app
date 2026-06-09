@@ -745,7 +745,7 @@ function getNotionLanguage(lang: string): string {
   return "plain text";
 }
 
-function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<string, unknown>[] {
+function chunkTextIntoRichText(text: string, isAdded: boolean = false): Record<string, unknown>[] {
   const richText: Record<string, unknown>[] = [];
   let remaining = text;
   if (!remaining) return [];
@@ -767,6 +767,86 @@ function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<s
   return richText;
 }
 
+function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<string, unknown>[] {
+  const tokens = [];
+  let remaining = text;
+  if (!remaining) return [];
+
+  const regex = /(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(`(.*?)`)|(?:\[(.*?)\]\((.*?)\))/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push({ text: text.slice(lastIndex, match.index), type: "text" });
+    }
+
+    if (match[1] !== undefined) {
+      tokens.push({ text: match[2], type: "bold" });
+    } else if (match[3] !== undefined) {
+      tokens.push({ text: match[4], type: "italic" });
+    } else if (match[5] !== undefined) {
+      tokens.push({ text: match[6], type: "strikethrough" });
+    } else if (match[7] !== undefined) {
+      tokens.push({ text: match[8], type: "code" });
+    } else if (match[9] !== undefined && match[10] !== undefined) {
+      tokens.push({ text: match[9], url: match[10], type: "link" });
+    } else {
+      tokens.push({ text: match[0], type: "text" });
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    tokens.push({ text: text.slice(lastIndex), type: "text" });
+  }
+
+  const richText: Record<string, unknown>[] = [];
+  
+  for (const token of tokens) {
+    if (!token.text && token.type !== "link") continue;
+    
+    let remainingText = token.text || "link";
+
+    while (remainingText.length > 0) {
+      const chunk = remainingText.slice(0, 1900);
+      remainingText = remainingText.slice(1900);
+      
+      const annotations: any = {};
+      if (isAdded) annotations.color = "green";
+      
+      if (token.type === "bold") annotations.bold = true;
+      else if (token.type === "italic") annotations.italic = true;
+      else if (token.type === "strikethrough") annotations.strikethrough = true;
+      else if (token.type === "code") annotations.code = true;
+
+      const rtObj: any = {
+        type: "text",
+        text: {
+          content: chunk
+        }
+      };
+
+      if (token.type === "link" && token.url) {
+        let validUrl = token.url.trim();
+        if (!validUrl.startsWith("http://") && !validUrl.startsWith("https://")) {
+            validUrl = "https://" + validUrl;
+        }
+        rtObj.text.link = { url: validUrl.slice(0, 1000) };
+      }
+
+      if (Object.keys(annotations).length > 0) {
+        rtObj.annotations = annotations;
+      }
+
+      richText.push(rtObj);
+    }
+  }
+
+  return richText;
+}
+
 function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown>[] {
   const richText: Record<string, unknown>[] = [];
   if (codeBlockLines.length === 0) return [];
@@ -779,7 +859,7 @@ function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "
     const suffix = idx === codeBlockLines.length - 1 ? "" : "\n";
     
     if (item.type !== currentType) {
-      richText.push(...splitTextIntoRichText(currentGroup.join(""), currentType === "added"));
+      richText.push(...chunkTextIntoRichText(currentGroup.join(""), currentType === "added"));
       currentType = item.type;
       currentGroup = [item.text + suffix];
     } else {
@@ -787,7 +867,7 @@ function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "
     }
   }
   if (currentGroup.length > 0) {
-    richText.push(...splitTextIntoRichText(currentGroup.join(""), currentType === "added"));
+    richText.push(...chunkTextIntoRichText(currentGroup.join(""), currentType === "added"));
   }
 
   return richText;
@@ -908,6 +988,10 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
     } else if (isTableLine) {
       inTable = true;
       tableLines.push(line);
+      continue;
+    }
+
+    if (trimmedText === "") {
       continue;
     }
 
