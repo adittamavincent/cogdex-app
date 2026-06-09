@@ -291,7 +291,7 @@ export async function createEntry(params: {
   const properties: Record<string, unknown> = {
     Name: { title: inheritedTitle ? [{ text: { content: inheritedTitle } }] : [] },
     Type: { select: { name: pageType } },
-    Include: { checkbox: true },
+    Include: { checkbox: pageType !== "Compile" },
     Project: { relation: [{ id: thoughtId }] },
   };
 
@@ -871,4 +871,22 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     });
   }
   debug(`Finished writing merged content back to canvas page ${canvasEntryId}`);
+
+  // 5. Toggle off Include for other canvases, and toggle on for current canvas
+  await Promise.all(
+    results.map(async (r) => {
+      const isCurrent = r.id === canvasEntryId;
+      const currentInclude = findProperty((r as any).properties || {}, "Include")?.checkbox;
+      const targetInclude = isCurrent;
+      if (currentInclude !== targetInclude) {
+        debug(`Setting Include to ${targetInclude} for canvas entry ${r.id}`);
+        await notion.pages.update({
+          page_id: r.id,
+          properties: {
+            Include: { checkbox: targetInclude }
+          }
+        });
+      }
+    })
+  );
 }
