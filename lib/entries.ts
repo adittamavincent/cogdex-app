@@ -564,13 +564,20 @@ interface Hunk {
   lines: string[];
 }
 
-export function parseDiff(diffText: string): Hunk[] {
-  let content = diffText;
-  const match = diffText.match(/```(?:diff)?\n([\s\S]*?)```/);
-  if (match) {
-    content = match[1];
+export function unwrapCodeFences(text: string): string {
+  let trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    trimmed = trimmed.slice(1, -1).trim();
   }
+  const match = trimmed.match(/^`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}$/);
+  if (match) {
+    return match[1];
+  }
+  return trimmed;
+}
 
+export function parseDiff(diffText: string): Hunk[] {
+  const content = unwrapCodeFences(diffText);
   const lines = content.split(/\r?\n/);
   const hunks: Hunk[] = [];
   let currentHunk: Hunk | null = null;
@@ -610,41 +617,41 @@ export function parseDiff(diffText: string): Hunk[] {
   return hunks;
 }
 
-function matchLines(baseLines: string[], startIdx: number, searchLines: string[]): boolean {
+function matchLines(baseLines: Array<{ text: string, type: "normal" | "added" }>, startIdx: number, searchLines: string[]): boolean {
   for (let i = 0; i < searchLines.length; i++) {
-    if (baseLines[startIdx + i].trim() !== searchLines[i].trim()) {
+    if (baseLines[startIdx + i].text.trim() !== searchLines[i].trim()) {
       return false;
     }
   }
   return true;
 }
 
-export function applyPatch(baseText: string, patchText: string): string {
+export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
   const hunks = parseDiff(patchText);
+  const baseLines: Array<{ text: string, type: "normal" | "added" }> = baseText.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }));
   if (hunks.length === 0) {
-    return patchText;
+    return baseLines;
   }
 
-  const baseLines = baseText.split(/\r?\n/);
   const sortedHunks = [...hunks].sort((a, b) => b.oldStart - a.oldStart);
 
   for (const hunk of sortedHunks) {
     const searchLines: string[] = [];
-    const replaceLines: string[] = [];
+    const replaceLines: { text: string, type: "normal" | "added" }[] = [];
 
     for (const line of hunk.lines) {
       if (line.startsWith("-")) {
         searchLines.push(line.slice(1));
       } else if (line.startsWith("+")) {
-        replaceLines.push(line.slice(1));
+        replaceLines.push({ text: line.slice(1), type: "added" as const });
       } else if (line.startsWith(" ")) {
         searchLines.push(line.slice(1));
-        replaceLines.push(line.slice(1));
+        replaceLines.push({ text: line.slice(1), type: "normal" as const });
       } else if (line.startsWith("\\")) {
         // Ignore
       } else {
         searchLines.push(line);
-        replaceLines.push(line);
+        replaceLines.push({ text: line, type: "normal" as const });
       }
     }
 
@@ -706,61 +713,202 @@ export function applyPatch(baseText: string, patchText: string): string {
       baseLines.splice(foundIndex, searchLines.length, ...replaceLines);
     } else {
       if (baseText.trim() === "") {
-        return replaceLines.join("\n");
+        return replaceLines;
       }
       warn(`Could not apply hunk starting at line ${hunk.oldStart}`);
     }
   }
 
-  return baseLines.join("\n");
+  return baseLines;
 }
 
-export function textToNotionBlocks(text: string): Record<string, unknown>[] {
-  const lines = text.split(/\r?\n/);
-  const blocks: Record<string, unknown>[] = [];
-  let currentChunk: string[] = [];
-  let currentLength = 0;
+const VALID_NOTION_LANGUAGES = new Set([
+  "abap", "arduino", "bash", "basic", "c", "clojure", "coffeescript", "cpp", "csharp", "css",
+  "dart", "diff", "docker", "elixir", "elm", "erlang", "flow", "fortran", "fsharp", "gherkin",
+  "glsl", "go", "graphql", "groovy", "haskell", "html", "java", "javascript", "json", "julia",
+  "kotlin", "latex", "less", "lisp", "livescript", "lua", "makefile", "markdown", "markup",
+  "matlab", "mermaid", "nix", "objective-c", "ocaml", "pascal", "perl", "php", "plain text",
+  "powershell", "prolog", "protobuf", "python", "r", "reason", "ruby", "rust", "sass", "scala",
+  "scheme", "scss", "shell", "sql", "swift", "typescript", "vb.net", "verilog", "vhdl",
+  "visual basic", "webassembly", "xml", "yaml"
+]);
 
-  for (const line of lines) {
-    if (currentLength + line.length + 1 > 1900) {
-      if (currentChunk.length > 0) {
-        blocks.push({
-          object: "block",
-          type: "paragraph",
-          paragraph: {
-            rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
-          },
-        });
-        currentChunk = [];
-        currentLength = 0;
-      }
+function getNotionLanguage(lang: string): string {
+  const cleaned = lang.trim().toLowerCase();
+  if (cleaned === "js") return "javascript";
+  if (cleaned === "ts") return "typescript";
+  if (cleaned === "sh") return "shell";
+  if (cleaned === "py") return "python";
+  if (VALID_NOTION_LANGUAGES.has(cleaned)) {
+    return cleaned;
+  }
+  return "plain text";
+}
+
+function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<string, unknown>[] {
+  const richText: Record<string, unknown>[] = [];
+  let remaining = text;
+  if (!remaining) return [];
+  while (remaining.length > 0) {
+    const chunk = remaining.slice(0, 1900);
+    const annotation: Record<string, unknown> = {};
+    if (isAdded) {
+      annotation.annotations = { color: "green" };
     }
+    richText.push({
+      type: "text",
+      text: {
+        content: chunk,
+      },
+      ...annotation,
+    });
+    remaining = remaining.slice(1900);
+  }
+  return richText;
+}
 
-    if (line.length > 1900) {
-      let remaining = line;
-      while (remaining.length > 0) {
-        const piece = remaining.slice(0, 1900);
-        blocks.push({
-          object: "block",
-          type: "paragraph",
-          paragraph: {
-            rich_text: [{ type: "text", text: { content: piece } }],
-          },
-        });
-        remaining = remaining.slice(1900);
-      }
+function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown>[] {
+  const richText: Record<string, unknown>[] = [];
+  if (codeBlockLines.length === 0) return [];
+
+  let currentType = codeBlockLines[0].type;
+  let currentGroup: string[] = [];
+
+  for (let idx = 0; idx < codeBlockLines.length; idx++) {
+    const item = codeBlockLines[idx];
+    const suffix = idx === codeBlockLines.length - 1 ? "" : "\n";
+    
+    if (item.type !== currentType) {
+      richText.push(...splitTextIntoRichText(currentGroup.join(""), currentType === "added"));
+      currentType = item.type;
+      currentGroup = [item.text + suffix];
     } else {
-      currentChunk.push(line);
-      currentLength += line.length + 1;
+      currentGroup.push(item.text + suffix);
     }
   }
+  if (currentGroup.length > 0) {
+    richText.push(...splitTextIntoRichText(currentGroup.join(""), currentType === "added"));
+  }
 
-  if (currentChunk.length > 0) {
+  return richText;
+}
+
+export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown>[] {
+  const lines = typeof linesInput === "string"
+    ? linesInput.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }))
+    : linesInput;
+  const blocks: Record<string, unknown>[] = [];
+  
+  let inCodeBlock = false;
+  let codeBlockLines: Array<{ text: string, type: "normal" | "added" }> = [];
+  let codeLanguage = "plain text";
+  let codeFenceLength = 3;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (inCodeBlock) {
+      const fenceMatch = line.text.match(/^(`{3,})/);
+      if (fenceMatch && fenceMatch[1].length >= codeFenceLength) {
+        blocks.push({
+          object: "block",
+          type: "code",
+          code: {
+            rich_text: buildRichTextForCodeBlock(codeBlockLines),
+            language: codeLanguage,
+          },
+        });
+        inCodeBlock = false;
+        codeBlockLines = [];
+      } else {
+        codeBlockLines.push(line);
+      }
+      continue;
+    }
+
+    const codeStartMatch = line.text.match(/^(`{3,})(.*)$/);
+    if (codeStartMatch) {
+      inCodeBlock = true;
+      codeFenceLength = codeStartMatch[1].length;
+      codeLanguage = getNotionLanguage(codeStartMatch[2]);
+      continue;
+    }
+
+    if (line.text === "---" || line.text === "***" || line.text === "___") {
+      blocks.push({
+        object: "block",
+        type: "divider",
+        divider: {},
+      });
+      continue;
+    }
+
+    const headingMatch = line.text.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = Math.min(headingMatch[1].length, 3);
+      const type = `heading_${level}` as "heading_1" | "heading_2" | "heading_3";
+      blocks.push({
+        object: "block",
+        type,
+        [type]: {
+          rich_text: splitTextIntoRichText(headingMatch[2], line.type === "added"),
+        },
+      });
+      continue;
+    }
+
+    const bulletMatch = line.text.match(/^\s*[-*+]\s+(.*)$/);
+    if (bulletMatch) {
+      blocks.push({
+        object: "block",
+        type: "bulleted_list_item",
+        bulleted_list_item: {
+          rich_text: splitTextIntoRichText(bulletMatch[1], line.type === "added"),
+        },
+      });
+      continue;
+    }
+
+    const numberMatch = line.text.match(/^\s*\d+\.\s+(.*)$/);
+    if (numberMatch) {
+      blocks.push({
+        object: "block",
+        type: "numbered_list_item",
+        numbered_list_item: {
+          rich_text: splitTextIntoRichText(numberMatch[1], line.type === "added"),
+        },
+      });
+      continue;
+    }
+
+    const quoteMatch = line.text.match(/^\s*>\s*(.*)$/);
+    if (quoteMatch) {
+      blocks.push({
+        object: "block",
+        type: "quote",
+        quote: {
+          rich_text: splitTextIntoRichText(quoteMatch[1], line.type === "added"),
+        },
+      });
+      continue;
+    }
+
     blocks.push({
       object: "block",
       type: "paragraph",
       paragraph: {
-        rich_text: [{ type: "text", text: { content: currentChunk.join("\n") } }],
+        rich_text: splitTextIntoRichText(line.text, line.type === "added"),
+      },
+    });
+  }
+
+  if (inCodeBlock) {
+    blocks.push({
+      object: "block",
+      type: "code",
+      code: {
+        rich_text: buildRichTextForCodeBlock(codeBlockLines),
+        language: codeLanguage,
       },
     });
   }
@@ -812,8 +960,10 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   }
 
   // 1. Read diff content from target canvas page
-  const diffContent = await readPageContent(canvasEntryId);
+  let diffContent = await readPageContent(canvasEntryId);
   debug(`Read diff content from canvas ${canvasEntryId} (length: ${diffContent.length})`);
+
+  diffContent = unwrapCodeFences(diffContent);
 
   if (!isDiff(diffContent)) {
     debug(`Content is not a git diff. Skipping merge update.`);
@@ -849,7 +999,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   // 3. Apply git diff to get merged content
   const mergedContent = applyPatch(baseContent, diffContent);
-  debug(`Merged content length: ${mergedContent.length}`);
+  debug(`Merged content lines: ${mergedContent.length}`);
 
   // 4. Overwrite current canvas page content
   let hasMore = true;
@@ -876,7 +1026,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   debug("Wiped clean all blocks inside canvas page");
 
   // Write merged content as blocks
-  const blocks = textToNotionBlocks(mergedContent);
+  const blocks = markdownToRichNotionBlocks(mergedContent);
   const CHUNK = 100;
   for (let i = 0; i < blocks.length; i += CHUNK) {
     await notion.blocks.children.append({
