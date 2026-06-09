@@ -1134,6 +1134,22 @@ export function applyDiffToBlocks(blocks: any[], diffText: string): any[] {
   return result;
 }
 
+function removeNullsAndUndefined(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map(removeNullsAndUndefined);
+  } else if (obj !== null && typeof obj === 'object') {
+    const newObj: any = {};
+    for (const key of Object.keys(obj)) {
+      const val = obj[key];
+      if (val !== null && val !== undefined) {
+        newObj[key] = removeNullsAndUndefined(val);
+      }
+    }
+    return newObj;
+  }
+  return obj;
+}
+
 export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   debug(`Starting handleCanvasUpdate for ID: ${triggeredId}`);
 
@@ -1264,7 +1280,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
       delete copy.last_edited_by;
       delete copy.has_children;
       delete copy.archived;
-      return copy;
+      return removeNullsAndUndefined(copy);
   });
 
   // Write merged content as blocks
