@@ -32,23 +32,6 @@ interface NotionPage {
   }>;
 }
 
-// The 00-info protocol block — hardcoded, always prepended
-const PROTOCOL = `
-# Cogdex LLM Protocol
-
-## Purpose
-This file is the handshake between Cogdex and the LLM.
-Each <entry> below is a structured context file with a type and chronological number.
-Types: User (intent/question), Response (LLM reply), Canvas (shared document/code/state).
-
-## Rules
-1. Read entries in ascending number order.
-2. The latest User entry controls the requested output.
-3. Earlier entries are context — do not restart from zero.
-4. Match the language of the latest User entry.
-5. Write like a senior explaining to a competent peer: direct, structured, practical.
-`.trim();
-
 // Read all text content from a Notion page (recursive blocks → plain text)
 async function readPageContent(pageId: string): Promise<string> {
   // SDK v5: blocks.children.list is unchanged
@@ -136,33 +119,17 @@ async function buildXML(thoughtId: string): Promise<string> {
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  lines.push(PROTOCOL);
+  lines.push(promptContents.join("\n\n"));
   lines.push("</protocol>");
-
-  if (prompts.length > 0) {
-    lines.push("");
-    lines.push("<system_prompts>");
-    for (let i = 0; i < prompts.length; i++) {
-      const p = prompts[i];
-      const name = p.properties?.Name?.title?.[0]?.plain_text ?? "Unnamed";
-      const priority = p.properties?.Priority?.number ?? 0;
-      const content = promptContents[i];
-      lines.push(`  <prompt name="${name}" priority="${priority}">`);
-      lines.push(content);
-      lines.push(`  </prompt>`);
-    }
-    lines.push("</system_prompts>");
-  }
 
   lines.push("");
   lines.push("<context>");
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    const number = i + 1;
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
     const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     const content = entryContents[i];
-    lines.push(`  <entry number="${number}" type="${type}" title="${title}">`);
+    lines.push(`  <entry type="${type}" title="${title}">`);
     lines.push(content);
     lines.push(`  </entry>`);
   }
