@@ -1305,6 +1305,29 @@ export async function handleUserComment(thoughtId: string) {
 
   debug(`Scanning source entry ${sourceEntry.id} for comments to attach to ${targetEntry.id}`);
 
+  // Resolve branch and update properties
+  try {
+    const resolvedBranchDbId = await getBranchDbId(thoughtId);
+    const branches = await getBranchesForProject(thoughtId, resolvedBranchDbId);
+    const activeBranch = branches.find((b: any) => findProperty(b.properties || {}, "Active")?.checkbox);
+    const linkedBranchId = activeBranch?.id;
+
+    const propertiesToUpdate: any = {
+      "Entries Referenced": { relation: [{ id: sourceEntry.id }] }
+    };
+    if (linkedBranchId) {
+      propertiesToUpdate["Branch"] = { relation: [{ id: linkedBranchId }] };
+    }
+
+    await notion.pages.update({
+      page_id: targetEntry.id,
+      properties: propertiesToUpdate
+    });
+    debug(`Updated targetEntry properties: Branch=${linkedBranchId}, EntriesReferenced=${sourceEntry.id}`);
+  } catch (err) {
+    warn(`Failed to update targetEntry properties:`, err);
+  }
+
   // 2. Fetch all blocks from sourceEntry
   const blocks: any[] = [];
   let hasMore = true;
