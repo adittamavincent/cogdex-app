@@ -40,6 +40,7 @@ const TEMPLATES: Record<PageType, string> = {
   Compile: "", // filled by compile logic
   Branch: "",
   "New Branch": "",
+  "User Comment": "",
   Reset: "",
 };
 
@@ -1255,4 +1256,107 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
       }
     })
   );
+}
+
+export async function handleUserComment(thoughtId: string) {
+  debug(`Starting handleUserComment for thought: ${thoughtId}`);
+
+  // 1. Get the 2 most recent entries for this project
+  const recentResponse = await notion.dataSources.query({
+    data_source_id: ENTRY_DB_ID,
+    filter: {
+      property: "Project",
+      relation: { contains: thoughtId },
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 2,
+  });
+
+  if (recentResponse.results.length < 2) {
+    debug("Not enough entries to copy comments from.");
+    return;
+  }
+
+  const targetEntry = recentResponse.results[0]; // Newly created by automation
+  const sourceEntry = recentResponse.results[1]; // Previous entry to scan
+
+  debug(`Scanning source entry ${sourceEntry.id} for comments to attach to ${targetEntry.id}`);
+
+  // 2. Fetch all blocks from sourceEntry
+  const blocks: any[] = [];
+  let hasMore = true;
+  let startCursor: string | undefined;
+
+  while (hasMore) {
+    const listResponse = await notion.blocks.children.list({
+      block_id: sourceEntry.id,
+      start_cursor: startCursor,
+    });
+    blocks.push(...listResponse.results);
+    hasMore = listResponse.has_more;
+    startCursor = listResponse.next_cursor ?? undefined;
+  }
+
+  // 3. For each block, fetch comments
+  const newBlocks: any[] = [];
+  for (const block of blocks) {
+    try {
+      const commentsRes = await notion.comments.list({ block_id: block.id });
+      if (commentsRes.results.length > 0) {
+        // Find text content
+        let blockTextRichText = [];
+        if (block[block.type] && block[block.type].rich_text) {
+          blockTextRichText = block[block.type].rich_text;
+        }
+
+        if (blockTextRichText.length > 0) {
+          newBlocks.push({
+            object: "block",
+            type: "quote",
+            quote: { rich_text: blockTextRichText }
+          });
+        }
+
+        // Add the comments
+        for (const comment of commentsRes.results) {
+           newBlocks.push({
+             object: "block",
+             type: "callout",
+             callout: {
+               rich_text: comment.rich_text,
+               icon: { type: "emoji", emoji: "💬" }
+             }
+           });
+        }
+      }
+    } catch (err) {
+      // no comments or error fetching
+    }
+  }
+
+  // 4. Append newBlocks to targetEntry
+  if (newBlocks.length > 0) {
+    const CHUNK = 100;
+    for (let i = 0; i < newBlocks.length; i += CHUNK) {
+      await notion.blocks.children.append({
+        block_id: targetEntry.id,
+        children: newBlocks.slice(i, i + CHUNK) as any,
+      });
+    }
+    debug(`Appended ${newBlocks.length} comment blocks to target entry.`);
+  } else {
+    debug("No comments found.");
+    await notion.blocks.children.append({
+      block_id: targetEntry.id,
+      children: [
+        {
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: "No comments found on the previous entry." } }]
+          }
+        }
+      ] as any
+    });
+  }
 }

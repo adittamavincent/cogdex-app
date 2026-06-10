@@ -6,6 +6,7 @@ export type PageType =
   | "Compile"
   | "Branch"
   | "New Branch"
+  | "User Comment"
   | "Reset";
 
 // Notion automation webhook — actual payload shape sent by Notion
