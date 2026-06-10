@@ -97,7 +97,10 @@ export async function readPageContent(pageId: string): Promise<string> {
     else if (type === "heading_3") lines.push(`### ${text}`);
     else if (type === "bulleted_list_item") lines.push(`- ${text}`);
     else if (type === "numbered_list_item") lines.push(`1. ${text}`);
-    else if (type === "code") lines.push(`\`\`\`\n${text}\n\`\`\``);
+    else if (type === "code") {
+      const isDiff = (data as any)?.language === "diff" || text.startsWith("diff --git") || text.includes("diff --git");
+      if (!isDiff) lines.push(`\`\`\`\n${text}\n\`\`\``);
+    }
     else if (type === "quote") lines.push(`> ${text}`);
     else if (type === "divider") lines.push(`---`);
     else if (text) lines.push(text);
