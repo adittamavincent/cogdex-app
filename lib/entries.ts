@@ -1312,18 +1312,28 @@ export async function handleUserComment(thoughtId: string) {
     const activeBranch = branches.find((b: any) => findProperty(b.properties || {}, "Active")?.checkbox);
     const linkedBranchId = activeBranch?.id;
 
+    let inheritedTitle = "";
+    let inheritedIcon = activeBranch?.icon;
+
+    const nameProp = findProperty((sourceEntry as any).properties || {}, "Name");
+    inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
+
     const propertiesToUpdate: any = {
-      "Entries Referenced": { relation: [{ id: sourceEntry.id }] }
+      "Entries Referenced": { relation: [{ id: sourceEntry.id }] },
+      Name: { title: inheritedTitle ? [{ text: { content: inheritedTitle } }] : [] }
     };
     if (linkedBranchId) {
       propertiesToUpdate["Branch"] = { relation: [{ id: linkedBranchId }] };
     }
 
-    await notion.pages.update({
+    const updatePayload: any = {
       page_id: targetEntry.id,
       properties: propertiesToUpdate
-    });
-    debug(`Updated targetEntry properties: Branch=${linkedBranchId}, EntriesReferenced=${sourceEntry.id}`);
+    };
+    if (inheritedIcon) updatePayload.icon = inheritedIcon;
+
+    await notion.pages.update(updatePayload);
+    debug(`Updated targetEntry properties: Branch=${linkedBranchId}, EntriesReferenced=${sourceEntry.id}, Title=${inheritedTitle}`);
   } catch (err) {
     warn(`Failed to update targetEntry properties:`, err);
   }
