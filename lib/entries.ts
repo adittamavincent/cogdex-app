@@ -1258,6 +1258,29 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   );
 }
 
+function sanitizeRichText(richTexts: any[]): any[] {
+  if (!richTexts) return [];
+  const result: any[] = [];
+  for (const rt of richTexts) {
+    if (rt.text && rt.text.content && rt.text.content.length > 1900) {
+      let content = rt.text.content;
+      while (content.length > 0) {
+        result.push({
+          ...rt,
+          text: {
+            ...rt.text,
+            content: content.slice(0, 1900)
+          }
+        });
+        content = content.slice(1900);
+      }
+    } else {
+      result.push(rt);
+    }
+  }
+  return result;
+}
+
 export async function handleUserComment(thoughtId: string) {
   debug(`Starting handleUserComment for thought: ${thoughtId}`);
 
@@ -1306,7 +1329,7 @@ export async function handleUserComment(thoughtId: string) {
         // Find text content
         let blockTextRichText = [];
         if (block[block.type] && block[block.type].rich_text) {
-          blockTextRichText = block[block.type].rich_text;
+          blockTextRichText = sanitizeRichText(block[block.type].rich_text);
         }
 
         if (blockTextRichText.length > 0) {
@@ -1323,7 +1346,7 @@ export async function handleUserComment(thoughtId: string) {
              object: "block",
              type: "callout",
              callout: {
-               rich_text: comment.rich_text,
+               rich_text: sanitizeRichText(comment.rich_text),
                icon: { type: "emoji", emoji: "💬" }
              }
            });
