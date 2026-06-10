@@ -13,7 +13,12 @@ interface NotionBlock {
 }
 
 interface NotionRichText {
+  type?: string;
   plain_text?: string;
+  mention?: {
+    type?: string;
+    page?: { id: string };
+  };
 }
 
 interface NotionPage {
@@ -32,6 +37,22 @@ interface NotionPage {
   }>;
 }
 
+// Global cache for branch names during compile
+const branchCache = new Map<string, string>();
+
+async function getBranchName(branchId: string): Promise<string> {
+  if (branchCache.has(branchId)) return branchCache.get(branchId)!;
+  try {
+    const page = await notion.pages.retrieve({ page_id: branchId }) as any;
+    const name = page.properties?.Name?.title?.[0]?.plain_text ?? "Unknown";
+    branchCache.set(branchId, name);
+    return name;
+  } catch {
+    branchCache.set(branchId, "Unknown");
+    return "Unknown";
+  }
+}
+
 // Read all text content from a Notion page (recursive blocks → plain text)
 export async function readPageContent(pageId: string): Promise<string> {
   // SDK v5: blocks.children.list is unchanged
@@ -45,7 +66,31 @@ export async function readPageContent(pageId: string): Promise<string> {
     if (!data) continue;
 
     const richText = data.rich_text ?? [];
-    const text = richText.map((t) => t.plain_text ?? "").join("");
+    let text = "";
+    
+    for (const t of richText) {
+      if (t.type === "mention" && t.mention?.type === "page" && t.mention.page?.id) {
+        const mentionedPageId = t.mention.page.id;
+        const plainText = t.plain_text ?? "";
+        
+        let branchName = "Unknown";
+        try {
+          const mentionedPage = await notion.pages.retrieve({ page_id: mentionedPageId }) as any;
+          const branchRel = mentionedPage.properties?.Branch?.relation;
+          if (branchRel && branchRel.length > 0) {
+            branchName = await getBranchName(branchRel[0].id);
+          }
+        } catch (err) {
+          // Ignore retrieval errors for mentioned pages
+        }
+        
+        const tAttr = plainText.replace(/"/g, '&quot;');
+        const bAttr = branchName.replace(/"/g, '&quot;');
+        text += `<mention title="${tAttr}" branch="${bAttr}" />`;
+      } else {
+        text += t.plain_text ?? "";
+      }
+    }
 
     if (type === "heading_1") lines.push(`# ${text}`);
     else if (type === "heading_2") lines.push(`## ${text}`);
@@ -109,6 +154,26 @@ async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: str
     getIncludedSystemPrompts(),
   ]);
 
+  // Find unique branch IDs
+  const branchIds = new Set<string>();
+  for (const entry of entries) {
+    const branchRel = entry.properties?.Branch?.relation;
+    if (branchRel && branchRel.length > 0) {
+      branchIds.add(branchRel[0].id);
+    }
+  }
+
+  const branchMap = new Map<string, string>();
+  await Promise.all(Array.from(branchIds).map(async (id) => {
+    try {
+      const page = await notion.pages.retrieve({ page_id: id }) as any;
+      const name = page.properties?.Name?.title?.[0]?.plain_text ?? "Unknown";
+      branchMap.set(id, name);
+    } catch (err) {
+      branchMap.set(id, "Unknown");
+    }
+  }));
+
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
   const [promptContents, entryContents] = await Promise.all([
     Promise.all(prompts.map((p) => readPageContent(p.id))),
@@ -127,13 +192,21 @@ async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: str
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
+    const tagName = type.replace(/\s+/g, '');
     const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
+    const branchRel = entry.properties?.Branch?.relation;
+    const branchName = branchRel && branchRel.length > 0 ? branchMap.get(branchRel[0].id) ?? "Unknown" : "Unknown";
     const content = entryContents[i];
-    lines.push(`  <entry type="${type}" title="${title}">`);
+    
+    const tAttr = title.replace(/"/g, '&quot;');
+    const bAttr = branchName.replace(/"/g, '&quot;');
+    
+    lines.push(`  <${tagName} t="${tAttr}" b="${bAttr}">`);
     lines.push(content);
-    lines.push(`  </entry>`);
+    lines.push(`  </${tagName}>`);
   }
   lines.push("</context>");
+
   lines.push("");
   lines.push("</cogdex>");
 
