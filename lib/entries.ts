@@ -142,17 +142,19 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
   // 1. Fetch original view configurations to clone sorting/ordering/formatting
   const ORIGINAL_ENTRY_VIEW_ID = process.env.NOTION_ENTRY_VIEW_ID;
   const ORIGINAL_SYSTEM_PROMPT_VIEW_ID = process.env.NOTION_SYSTEM_PROMPT_VIEW_ID;
+  const ORIGINAL_CANVAS_VIEW_ID = process.env.NOTION_CANVAS_VIEW_ID;
 
-  if (!ORIGINAL_ENTRY_VIEW_ID || !ORIGINAL_SYSTEM_PROMPT_VIEW_ID) {
+  if (!ORIGINAL_ENTRY_VIEW_ID || !ORIGINAL_SYSTEM_PROMPT_VIEW_ID || !ORIGINAL_CANVAS_VIEW_ID) {
     throw new Error(
-      "Missing required view ID environment variables: NOTION_ENTRY_VIEW_ID, NOTION_SYSTEM_PROMPT_VIEW_ID"
+      "Missing required view ID environment variables: NOTION_ENTRY_VIEW_ID, NOTION_SYSTEM_PROMPT_VIEW_ID, NOTION_CANVAS_VIEW_ID"
     );
   }
 
-  debug(`Fetching original views: Entry=${ORIGINAL_ENTRY_VIEW_ID}, SystemPrompt=${ORIGINAL_SYSTEM_PROMPT_VIEW_ID}`);
-  const [entryView, systemPromptView] = await Promise.all([
+  debug(`Fetching original views: Entry=${ORIGINAL_ENTRY_VIEW_ID}, SystemPrompt=${ORIGINAL_SYSTEM_PROMPT_VIEW_ID}, Canvas=${ORIGINAL_CANVAS_VIEW_ID}`);
+  const [entryView, systemPromptView, canvasView] = await Promise.all([
     notion.views.retrieve({ view_id: ORIGINAL_ENTRY_VIEW_ID }),
     notion.views.retrieve({ view_id: ORIGINAL_SYSTEM_PROMPT_VIEW_ID }),
+    notion.views.retrieve({ view_id: ORIGINAL_CANVAS_VIEW_ID }),
   ]);
 
   // 2. Wipe clean all blocks inside the current page
@@ -262,6 +264,9 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
   };
 
   // 5. Create the cloned views sequentially
+
+  debug("Creating cloned Canvas database view");
+  await createClonedView(canvasView, CANVAS_DB_ID, projectFilterModifier);
 
   debug("Creating cloned Entry database view");
   await createClonedView(entryView, ENTRY_DB_ID, projectFilterModifier);
