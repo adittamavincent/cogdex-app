@@ -5,7 +5,8 @@ export type PageType =
   | "CNV RES"
   | "REG EXP"
   | "REG USR CMT"
-  | "Relink Databases";
+  | "Relink Databases"
+  | "CNV UPD";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button

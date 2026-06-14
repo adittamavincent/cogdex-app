@@ -41,6 +41,7 @@ const TEMPLATES: Record<PageType, string> = {
   "REG EXP": "",
   "REG USR CMT": "",
   "Relink Databases": "",
+  "CNV UPD": "",
 };
 
 function findProperty(properties: Record<string, any>, name: string): any {
@@ -1187,3 +1188,147 @@ export async function handleUserComment(thoughtId: string) {
     });
   }
 }
+
+export async function handleCNVUPD(thoughtId: string): Promise<void> {
+  debug(`Starting handleCNVUPD for Project ID: ${thoughtId}`);
+
+  // 1. Gather all entries of type "CNV RES" and "CNV EXP" for the project
+  const entriesResponse = await notion.dataSources.query({
+    data_source_id: ENTRY_DB_ID,
+    filter: {
+      property: "Project",
+      relation: { contains: thoughtId }
+    }
+  });
+
+  const canvasEntries = entriesResponse.results.filter((entry: any) => {
+    const type = findProperty(entry.properties || {}, "Type")?.select?.name;
+    return type === "CNV RES" || type === "CNV EXP";
+  });
+
+  // Sort them chronologically by their Name (converted to integer or alphanumerically)
+  canvasEntries.sort((a: any, b: any) => {
+    const nameA = findProperty(a.properties || {}, "Name")?.title?.[0]?.plain_text || "";
+    const nameB = findProperty(b.properties || {}, "Name")?.title?.[0]?.plain_text || "";
+    const numA = parseInt(nameA, 10);
+    const numB = parseInt(nameB, 10);
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return numA - numB;
+    }
+    return nameA.localeCompare(nameB, undefined, { numeric: true });
+  });
+
+  debug(`Found ${canvasEntries.length} canvas entries to process`);
+
+  // 2. Apply git diffs sequentially
+  let currentContent = "";
+  let latestEntryNumber = "";
+
+  for (const entry of canvasEntries) {
+    const nameProp = findProperty((entry as any).properties || {}, "Name");
+    const entryNum = nameProp?.title?.[0]?.plain_text ?? "";
+    if (entryNum) {
+      latestEntryNumber = entryNum;
+    }
+
+    const content = await readPageContent(entry.id);
+    const unwrapped = unwrapCodeFences(content);
+
+    if (isDiff(unwrapped)) {
+      const patchedLines = applyPatch(currentContent, unwrapped);
+      currentContent = patchedLines.map(l => l.text).join("\n");
+    } else {
+      currentContent = unwrapped;
+    }
+  }
+
+  // 3. Find existing canvas page in Canvas DB for this project
+  const canvasPagesResponse = await notion.dataSources.query({
+    data_source_id: CANVAS_DB_ID,
+    filter: {
+      property: "Project", relation: { contains: thoughtId }
+    }
+  });
+
+  let canvasPageId = "";
+  const results = canvasPagesResponse.results;
+
+  if (results.length > 0) {
+    canvasPageId = results[0].id;
+    debug(`Using existing canvas page ${canvasPageId}`);
+
+    // Update title/Name to the chronological number from entries
+    await notion.pages.update({
+      page_id: canvasPageId,
+      properties: {
+        Name: { title: [{ text: { content: latestEntryNumber || "1" } }] }
+      }
+    });
+
+    // Enforce "only allow 1 canvas only" by archiving other duplicate canvas pages
+    if (results.length > 1) {
+      debug(`Archiving ${results.length - 1} duplicate canvas pages`);
+      await Promise.all(
+        results.slice(1).map(r => notion.pages.update({ page_id: r.id, archived: true }))
+      );
+    }
+  } else {
+    debug(`Creating new canvas page in Canvas DB`);
+    const canvasPage = await notion.pages.create({
+      parent: { data_source_id: CANVAS_DB_ID },
+      properties: {
+        Name: { title: [{ text: { content: latestEntryNumber || "1" } }] },
+        Project: { relation: [{ id: thoughtId }] }
+      }
+    });
+    canvasPageId = canvasPage.id;
+  }
+
+  // 4. Link Project to Canvas
+  try {
+    await notion.pages.update({
+      page_id: thoughtId,
+      properties: {
+        Canvas: { relation: [{ id: canvasPageId }] }
+      }
+    });
+  } catch (err) {
+    warn(`Failed to link Project to Canvas:`, err);
+  }
+
+  // 5. Update content inside canvas page (wipe clean then write new patched content)
+  let hasMore = true;
+  let startCursor: string | undefined = undefined;
+
+  while (hasMore) {
+    const listResponse = await notion.blocks.children.list({
+      block_id: canvasPageId,
+      start_cursor: startCursor,
+    });
+
+    if (listResponse.results.length > 0) {
+      await Promise.all(
+        listResponse.results.map((block) =>
+          notion.blocks.delete({ block_id: block.id })
+        )
+      );
+    }
+
+    hasMore = listResponse.has_more;
+    startCursor = listResponse.next_cursor ?? undefined;
+  }
+  debug("Wiped clean all blocks inside canvas page");
+
+  const newBlocks = markdownToRichNotionBlocks(currentContent);
+  const cleanBlocks = newBlocks.map(b => cleanBlock(b));
+
+  const CHUNK = 100;
+  for (let i = 0; i < cleanBlocks.length; i += CHUNK) {
+    await notion.blocks.children.append({
+      block_id: canvasPageId,
+      children: cleanBlocks.slice(i, i + CHUNK) as any,
+    });
+  }
+  debug(`Finished updating canvas page ${canvasPageId} with latest content`);
+}
+

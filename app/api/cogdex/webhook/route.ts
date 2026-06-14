@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment } from "@/lib/entries";
+import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -19,6 +19,7 @@ const VALID_PAGE_TYPES: PageType[] = [
   "REG EXP",
   "REG USR CMT",
   "Relink Databases",
+  "CNV UPD",
 ];
 
 export async function POST(req: NextRequest) {
@@ -88,6 +89,11 @@ export async function POST(req: NextRequest) {
 
     if (pageType === "CNV RES") {
       await handleCanvasUpdate(thoughtId);
+      return Response.json({ ok: true });
+    }
+
+    if (pageType === "CNV UPD") {
+      await handleCNVUPD(thoughtId);
       return Response.json({ ok: true });
     }
 
