@@ -60,7 +60,24 @@ export async function createEntry(params: {
   const { thoughtId, pageType } = params;
   const isExport = pageType === "REG EXP";
 
+  let entryCount = 0;
+  let hasMore = true;
+  let nextCursor: string | undefined = undefined;
+
+  while (hasMore) {
+    const res = await notion.dataSources.query({
+      data_source_id: ENTRY_DB_ID,
+      filter: { property: "Project", relation: { contains: thoughtId } },
+      start_cursor: nextCursor,
+    });
+    entryCount += res.results.length;
+    hasMore = res.has_more;
+    nextCursor = res.next_cursor ?? undefined;
+  }
+  const nextNumber = entryCount + 1;
+
   const properties: Record<string, unknown> = {
+    Name: { title: [{ text: { content: String(nextNumber) } }] },
     Type: { select: { name: pageType } },
     Include: { checkbox: pageType !== "REG EXP" && pageType !== "CNV EXP" },
     Project: { relation: [{ id: thoughtId }] },
