@@ -26,6 +26,8 @@ export async function POST(req: NextRequest) {
   // --- Auth ---
   const incomingSecret =
     req.headers.get(SECRET_HEADER) ||
+    req.headers.get("cogdex-secret") ||
+    req.headers.get("x-cogdex-secret") ||
     req.headers.get("authorization")?.replace("Bearer ", "");
 
   if (!SECRET || incomingSecret !== SECRET) {
@@ -33,11 +35,15 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Page type (from header — the only thing that differs per button) ---
-  const pageTypeHeader = req.headers.get(PAGE_TYPE_HEADER);
+  const pageTypeHeader =
+    req.headers.get(PAGE_TYPE_HEADER) ||
+    req.headers.get("cogdex-page-type") ||
+    req.headers.get("x-cogdex-page-type");
+
   if (!pageTypeHeader || !VALID_PAGE_TYPES.includes(pageTypeHeader as PageType)) {
     return Response.json(
       {
-        error: `Invalid or missing ${PAGE_TYPE_HEADER} header. Must be one of: ${VALID_PAGE_TYPES.join(", ")}`,
+        error: `Invalid or missing page type header. Must be one of: ${VALID_PAGE_TYPES.join(", ")}`,
       },
       { status: 400 }
     );
