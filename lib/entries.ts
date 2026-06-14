@@ -868,14 +868,22 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   } else {
     debug(`Triggered page ${triggeredId} is a Project page, searching for latest Canvas Entry`);
     projectId = triggeredId;
-    const canvasPagesResponse = await notion.dataSources.query({
-      data_source_id: CANVAS_DB_ID,
-      filter: {
-        property: "Project", relation: { contains: projectId }
-      },
-      sorts: [{ timestamp: "created_time", direction: "descending" }],
-      page_size: 1
-    });
+    let canvasPagesResponse;
+    try {
+      canvasPagesResponse = await notion.dataSources.query({
+        data_source_id: CANVAS_DB_ID,
+        filter: {
+          property: "Project", relation: { contains: projectId }
+        },
+        sorts: [{ timestamp: "created_time", direction: "descending" }],
+        page_size: 1
+      });
+    } catch (err: any) {
+      if (err.code === "object_not_found") {
+        throw new Error(`Canvas DB not found. Ensure the Canvas DB is shared with the integration.`);
+      }
+      throw err;
+    }
 
     if (canvasPagesResponse.results.length === 0) {
       throw new Error(`No Canvas entry found for project ${projectId}.`);

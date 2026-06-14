@@ -126,17 +126,25 @@ async function getIncludedSystemPrompts() {
 
 async function getLatestCanvas(thoughtId: string): Promise<NotionPage | null> {
   if (!CANVAS_DB_ID) return null;
-  const response = await notion.dataSources.query({
-    data_source_id: CANVAS_DB_ID,
-    filter: {
-      property: "Project",
-      relation: { contains: thoughtId }
-    },
-    sorts: [{ timestamp: "created_time", direction: "descending" }],
-    page_size: 1
-  });
-  if (response.results.length === 0) return null;
-  return response.results[0] as unknown as NotionPage;
+  try {
+    const response = await notion.dataSources.query({
+      data_source_id: CANVAS_DB_ID,
+      filter: {
+        property: "Project",
+        relation: { contains: thoughtId }
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 1
+    });
+    if (response.results.length === 0) return null;
+    return response.results[0] as unknown as NotionPage;
+  } catch (err: any) {
+    if (err.code === "object_not_found") {
+      console.warn("Canvas DB not found or not shared with integration. Skipping Canvas export.");
+      return null;
+    }
+    throw err;
+  }
 }
 
 // Build the full XML context string and return the involved entry/prompt IDs
