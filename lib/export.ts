@@ -4,6 +4,7 @@ import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
+const CANVAS_DB_ID = process.env.NOTION_CANVAS_DB_ID!;
 
 interface NotionBlock {
   type: string;
@@ -96,8 +97,8 @@ async function getIncludedEntries(thoughtId: string) {
       and: [
         { property: "Project", relation: { contains: thoughtId } },
         { property: "Include", checkbox: { equals: true } },
-        { property: "Type", select: { does_not_equal: "Export" } },
-        { property: "Type", select: { does_not_equal: "Canvas Export" } },
+        { property: "Type", select: { does_not_equal: "REG EXP" } },
+        { property: "Type", select: { does_not_equal: "CNV EXP" } },
       ],
     },
   });
@@ -123,19 +124,36 @@ async function getIncludedSystemPrompts() {
   return response.results as unknown as NotionPage[];
 }
 
+async function getLatestCanvas(thoughtId: string): Promise<NotionPage | null> {
+  if (!CANVAS_DB_ID) return null;
+  const response = await notion.dataSources.query({
+    data_source_id: CANVAS_DB_ID,
+    filter: {
+      property: "Project",
+      relation: { contains: thoughtId }
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 1
+  });
+  if (response.results.length === 0) return null;
+  return response.results[0] as unknown as NotionPage;
+}
+
 // Build the full XML context string and return the involved entry/prompt IDs
 async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
-  const [entries, prompts] = await Promise.all([
+  const [entries, prompts, latestCanvas] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
+    getLatestCanvas(thoughtId),
   ]);
 
 
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
-  const [promptContents, entryContents] = await Promise.all([
+  const [promptContents, entryContents, canvasContent] = await Promise.all([
     Promise.all(prompts.map((p) => readPageContent(p.id))),
     Promise.all(entries.map((entry) => readPageContent(entry.id))),
+    latestCanvas ? readPageContent(latestCanvas.id) : Promise.resolve(null),
   ]);
 
   const lines: string[] = [];
@@ -150,15 +168,22 @@ async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: str
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
-    const tagName = type.replace(/\s+/g, '');
     const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     const content = entryContents[i];
     
     const tAttr = title.replace(/"/g, '&quot;');
     
-    lines.push(`  <${tagName} t="${tAttr}">`);
+    lines.push(`  <entry type="${type}" title="${tAttr}">`);
     lines.push(content);
-    lines.push(`  </${tagName}>`);
+    lines.push(`  </entry>`);
+  }
+
+  if (latestCanvas && canvasContent) {
+    const title = latestCanvas.properties?.Name?.title?.[0]?.plain_text ?? "";
+    const tAttr = title.replace(/"/g, '&quot;');
+    lines.push(`  <entry type="CNV EXP" title="${tAttr}">`);
+    lines.push(canvasContent);
+    lines.push(`  </entry>`);
   }
   lines.push("</context>");
 

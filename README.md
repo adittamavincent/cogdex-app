@@ -75,10 +75,12 @@ COGDEX_WEBHOOK_SECRET=pick_a_long_random_string_here
 # Group 1: Project (No View ID required)
 NOTION_PROJECT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Group 2: Entry, System Prompt (DB and View IDs)
-
+# Group 2: Entry, Canvas, System Prompt (DB and View IDs)
 NOTION_ENTRY_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_ENTRY_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+NOTION_CANVAS_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_CANVAS_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 NOTION_SYSTEM_PROMPT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_SYSTEM_PROMPT_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

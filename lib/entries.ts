@@ -5,6 +5,7 @@ import { readPageContent } from "./export";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
+const CANVAS_DB_ID = process.env.NOTION_CANVAS_DB_ID!;
 
 interface NotionPage {
   id: string;
@@ -839,7 +840,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   const parentId = pageObj.parent.database_id || pageObj.parent.data_source_id;
 
-  if (parentId === ENTRY_DB_ID) {
+  if (parentId === CANVAS_DB_ID) {
     debug(`Triggered page ${triggeredId} is a Canvas Entry`);
     canvasEntryId = triggeredId;
     const projectProp = findProperty(pageObj.properties || {}, "Project");
@@ -851,12 +852,9 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     debug(`Triggered page ${triggeredId} is a Project page, searching for latest Canvas Entry`);
     projectId = triggeredId;
     const canvasPagesResponse = await notion.dataSources.query({
-      data_source_id: ENTRY_DB_ID,
+      data_source_id: CANVAS_DB_ID,
       filter: {
-        and: [
-          { property: "Project", relation: { contains: projectId } },
-          { property: "Type", select: { equals: "Canvas" } }
-        ]
+        property: "Project", relation: { contains: projectId }
       },
       sorts: [{ timestamp: "created_time", direction: "descending" }],
       page_size: 1
@@ -881,12 +879,9 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   // 2. Find previous canvas page in this project
   const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: ENTRY_DB_ID,
+    data_source_id: CANVAS_DB_ID,
     filter: {
-      and: [
-        { property: "Project", relation: { contains: projectId } },
-        { property: "Type", select: { equals: "Canvas" } }
-      ]
+      property: "Project", relation: { contains: projectId }
     },
     sorts: [{ timestamp: "created_time", direction: "descending" }]
   });
