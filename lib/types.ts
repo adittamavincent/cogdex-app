@@ -1,13 +1,11 @@
 export type PageType =
-  | "User"
-  | "Response"
-  | "Canvas"
-  | "Canvas Update"
-  | "Compile"
-  | "Branch"
-  | "New Branch"
-  | "User Comment"
-  | "Reset";
+  | "REG USR"
+  | "REG RES"
+  | "CNV EXP"
+  | "CNV RES"
+  | "REG EXP"
+  | "REG USR CMT"
+  | "Relink Databases";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button

@@ -37,21 +37,7 @@ interface NotionPage {
   }>;
 }
 
-// Global cache for branch names during compile
-const branchCache = new Map<string, string>();
 
-async function getBranchName(branchId: string): Promise<string> {
-  if (branchCache.has(branchId)) return branchCache.get(branchId)!;
-  try {
-    const page = await notion.pages.retrieve({ page_id: branchId }) as any;
-    const name = page.properties?.Name?.title?.[0]?.plain_text ?? "Unknown";
-    branchCache.set(branchId, name);
-    return name;
-  } catch {
-    branchCache.set(branchId, "Unknown");
-    return "Unknown";
-  }
-}
 
 // Read all text content from a Notion page (recursive blocks → plain text)
 export async function readPageContent(pageId: string): Promise<string> {
@@ -70,23 +56,9 @@ export async function readPageContent(pageId: string): Promise<string> {
     
     for (const t of richText) {
       if (t.type === "mention" && t.mention?.type === "page" && t.mention.page?.id) {
-        const mentionedPageId = t.mention.page.id;
         const plainText = t.plain_text ?? "";
-        
-        let branchName = "Unknown";
-        try {
-          const mentionedPage = await notion.pages.retrieve({ page_id: mentionedPageId }) as any;
-          const branchRel = mentionedPage.properties?.Branch?.relation;
-          if (branchRel && branchRel.length > 0) {
-            branchName = await getBranchName(branchRel[0].id);
-          }
-        } catch (err) {
-          // Ignore retrieval errors for mentioned pages
-        }
-        
         const tAttr = plainText.replace(/"/g, '&quot;');
-        const bAttr = branchName.replace(/"/g, '&quot;');
-        text += `<mention title="${tAttr}" branch="${bAttr}" />`;
+        text += `<mention title="${tAttr}" />`;
       } else {
         text += t.plain_text ?? "";
       }
@@ -124,18 +96,19 @@ async function getIncludedEntries(thoughtId: string) {
       and: [
         { property: "Project", relation: { contains: thoughtId } },
         { property: "Include", checkbox: { equals: true } },
-        { property: "Type", select: { does_not_equal: "Compile" } },
+        { property: "Type", select: { does_not_equal: "Export" } },
+        { property: "Type", select: { does_not_equal: "Canvas Export" } },
       ],
     },
   });
 
   const entries = response.results as unknown as NotionPage[];
 
-  // Sort: entries by created_time ascending
+  // Sort alphanumerically by Title/Name
   return entries.sort((a, b) => {
-    return (
-      new Date(a.created_time).getTime() - new Date(b.created_time).getTime()
-    );
+    const titleA = a.properties?.Name?.title?.[0]?.plain_text ?? a.properties?.Title?.title?.[0]?.plain_text ?? "";
+    const titleB = b.properties?.Name?.title?.[0]?.plain_text ?? b.properties?.Title?.title?.[0]?.plain_text ?? "";
+    return titleA.localeCompare(titleB, undefined, { numeric: true });
   });
 }
 
@@ -157,25 +130,7 @@ async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: str
     getIncludedSystemPrompts(),
   ]);
 
-  // Find unique branch IDs
-  const branchIds = new Set<string>();
-  for (const entry of entries) {
-    const branchRel = entry.properties?.Branch?.relation;
-    if (branchRel && branchRel.length > 0) {
-      branchIds.add(branchRel[0].id);
-    }
-  }
 
-  const branchMap = new Map<string, string>();
-  await Promise.all(Array.from(branchIds).map(async (id) => {
-    try {
-      const page = await notion.pages.retrieve({ page_id: id }) as any;
-      const name = page.properties?.Name?.title?.[0]?.plain_text ?? "Unknown";
-      branchMap.set(id, name);
-    } catch (err) {
-      branchMap.set(id, "Unknown");
-    }
-  }));
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
   const [promptContents, entryContents] = await Promise.all([
@@ -197,14 +152,11 @@ async function buildXML(thoughtId: string): Promise<{ xml: string; entryIds: str
     const type = entry.properties?.Type?.select?.name ?? "Unknown";
     const tagName = type.replace(/\s+/g, '');
     const title = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
-    const branchRel = entry.properties?.Branch?.relation;
-    const branchName = branchRel && branchRel.length > 0 ? branchMap.get(branchRel[0].id) ?? "Unknown" : "Unknown";
     const content = entryContents[i];
     
     const tAttr = title.replace(/"/g, '&quot;');
-    const bAttr = branchName.replace(/"/g, '&quot;');
     
-    lines.push(`  <${tagName} t="${tAttr}" b="${bAttr}">`);
+    lines.push(`  <${tagName} t="${tAttr}">`);
     lines.push(content);
     lines.push(`  </${tagName}>`);
   }
@@ -278,20 +230,23 @@ function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
   return blocks;
 }
 
-export async function compileAndCreate(thoughtId: string): Promise<void> {
+export async function exportAndCreate(thoughtId: string, isCanvasExport: boolean = false): Promise<void> {
   const { xml, entryIds, promptIds } = await buildXML(thoughtId);
 
-  // Create the Compile entry page (Number = null)
+  // Prepend <canvas> if needed
+  const finalXml = isCanvasExport ? `<canvas>\n\n${xml}` : xml;
+
+  // Create the Export entry page
   const { pageId } = await createEntry({
     thoughtId,
-    pageType: "Compile",
+    pageType: isCanvasExport ? "CNV EXP" : "REG EXP",
     entriesReferencedIds: entryIds,
     systemPromptsUsedIds: promptIds,
   });
 
   // Write XML as paragraph blocks to the new page.
   // Notion has a 100-blocks-per-append limit — chunk to stay within it.
-  const blocks = xmlToNotionBlocks(xml);
+  const blocks = xmlToNotionBlocks(finalXml);
   const CHUNK = 100;
   for (let i = 0; i < blocks.length; i += CHUNK) {
     // SDK v5: blocks.children.append is unchanged

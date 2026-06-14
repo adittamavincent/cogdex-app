@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry, relinkDatabases, handleNewBranchClick, handleSetActiveClick, handleCanvasUpdate, handleUserComment } from "@/lib/entries";
-import { compileAndCreate } from "@/lib/compile";
+import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment } from "@/lib/entries";
+import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
 // Force Node.js runtime (required for Notion SDK and long-running compile jobs)
@@ -12,15 +12,13 @@ const SECRET_HEADER = process.env.COGDEX_SECRET_HEADER || "x-cogdex-secret";
 const PAGE_TYPE_HEADER = process.env.COGDEX_PAGE_TYPE_HEADER || "x-cogdex-page-type";
 
 const VALID_PAGE_TYPES: PageType[] = [
-  "User",
-  "Response",
-  "Canvas",
-  "Canvas Update",
-  "Compile",
-  "Branch",
-  "New Branch",
-  "User Comment",
-  "Reset",
+  "REG USR",
+  "REG RES",
+  "CNV EXP",
+  "CNV RES",
+  "REG EXP",
+  "REG USR CMT",
+  "Relink Databases",
 ];
 
 export async function POST(req: NextRequest) {
@@ -73,32 +71,27 @@ export async function POST(req: NextRequest) {
 
   // --- Route to action ---
   try {
-    if (pageType === "Compile") {
-      await compileAndCreate(thoughtId);
+    if (pageType === "REG EXP") {
+      await exportAndCreate(thoughtId, false);
       return Response.json({ ok: true });
     }
 
-    if (pageType === "Branch") {
-      await handleNewBranchClick(thoughtId);
+    if (pageType === "CNV EXP") {
+      await exportAndCreate(thoughtId, true);
       return Response.json({ ok: true });
     }
 
-    if (pageType === "New Branch") {
-      await handleSetActiveClick(thoughtId);
-      return Response.json({ ok: true });
-    }
-
-    if (pageType === "Reset") {
+    if (pageType === "Relink Databases") {
       await relinkDatabases(thoughtId);
       return Response.json({ ok: true });
     }
 
-    if (pageType === "Canvas Update") {
+    if (pageType === "CNV RES") {
       await handleCanvasUpdate(thoughtId);
       return Response.json({ ok: true });
     }
 
-    if (pageType === "User Comment") {
+    if (pageType === "REG USR CMT") {
       await handleUserComment(thoughtId);
       return Response.json({ ok: true });
     }

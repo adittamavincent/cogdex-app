@@ -1,6 +1,6 @@
 # Cogdex App
 
-A minimal Next.js (App Router) backend hosted on Vercel. Its sole job is to receive webhooks from Notion button automations and either create a new typed entry page in a Notion database, compile selected entries and system prompts into a structured XML context block, manage project branches, apply code diff patches to canvas files, or reset database views.
+A minimal Next.js (App Router) backend hosted on Vercel. Its sole job is to receive webhooks from Notion button automations and either create a new typed entry page in a Notion database, export selected entries and system prompts into a structured XML context block, manage project branches, apply code diff patches to canvas files, or reset database views.
 
 No user-facing frontend. No auth system. No database other than Notion. Single-user personal tool.
 
@@ -10,13 +10,11 @@ No user-facing frontend. No auth system. No database other than Notion. Single-u
 
 | Webhook Action | Behaviour |
 |---|---|
-| `User` / `Response` / `Canvas` | Creates a new typed page in the Entries database under the active branch. |
-| `Canvas Update` | Reads git diff content from a Canvas page, applies patch to the previous Canvas page version, and appends the full version of the canvas code back below the diff block. |
-| `Compile` | Reads all `Include=true` Entries + System Prompts → builds a `<cogdex>` XML block → writes it to a new `Compile` entry page. |
-| `Branch` | Creates or activates a new Branch page for the Project, randomizes its emoji icon, sets it to active, and deactivates all other branches. |
-| `New Branch` | Sets a specific Branch page to Active and deactivates other branches. |
-| `User Comment` | Scans the previous entry, copies comments, and links references between the two most recent entries. |
-| `Reset` | Wipes the current project page's blocks and clones the Branch, Entry, and System Prompt database views inside it based on original template views. |
+| `REG USR` / `REG RES` / `CNV EXP` | Creates a new typed page in the Entries database for the project. |
+| `CNV RES` | Reads git diff content from a Canvas page, applies patch to the previous Canvas page version, and appends the full version of the canvas code back below the diff block. |
+| `REG EXP` | Reads all `Include=true` Entries + System Prompts → builds a `<cogdex>` XML block → writes it to a new `REG EXP` entry page. |
+| `REG USR CMT` | Scans the previous entry, copies comments, and links references between the two most recent entries. |
+| `Relink Databases` | Wipes the current project page's blocks and clones the Entry and System Prompt database views inside it based on original template views. |
 
 The compiled XML output can be exported from Notion as Markdown and pasted into any LLM as structured context.
 
@@ -24,7 +22,7 @@ The compiled XML output can be exported from Notion as Markdown and pasted into 
 
 To prevent Vercel Serverless Function timeouts (`FUNCTION_INVOCATION_TIMEOUT`) and optimize Markdown exports, the compilation system is designed with:
 - **Parallel Content Fetching**: Page database queries and block structures are fetched concurrently via `Promise.all` instead of sequentially, reducing Notion API query time to a single concurrent batch.
-- **Grouped Multi-line Text Packing**: Rather than creating a separate Notion block for every line of XML (which triggers blank double-spacing in Markdown exports and requires hundreds of API calls), lines are grouped into paragraph blocks of up to 1900 characters (separated by `\n`). This results in a clean, raw, single-spaced Markdown output identical to local files, and reduces API write requests to just one or two per compile job.
+- **Grouped Multi-line Text Packing**: Rather than creating a separate Notion block for every line of XML (which triggers blank double-spacing in Markdown exports and requires hundreds of API calls), lines are grouped into paragraph blocks of up to 1900 characters (separated by `\n`). This results in a clean, raw, single-spaced Markdown output identical to local files, and reduces API write requests to just one or two per export job.
 
 ---
 
@@ -55,11 +53,11 @@ cogdex-app/
 │   └── page.tsx                   ← plain status page
 ├── lib/
 │   ├── notion.ts                  ← Notion client singleton
-│   ├── entries.ts                 ← create entry, branch, canvas, and reset logic
-│   ├── compile.ts                 ← compile + XML build logic
+│   ├── entries.ts                 ← create entry, canvas, and reset logic
+│   ├── export.ts                  ← export + XML build logic
 │   ├── logger.ts                  ← centralized logging
 │   └── types.ts                   ← shared TypeScript types
-├── vercel.json                    ← maxDuration: 60 for compile jobs
+├── vercel.json                    ← maxDuration: 60 for export jobs
 ├── .env.local                     ← not committed
 └── package.json
 ```
@@ -77,9 +75,7 @@ COGDEX_WEBHOOK_SECRET=pick_a_long_random_string_here
 # Group 1: Project (No View ID required)
 NOTION_PROJECT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# Group 2: Branch, Entry, System Prompt (DB and View IDs)
-NOTION_BRANCH_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_BRANCH_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Group 2: Entry, System Prompt (DB and View IDs)
 
 NOTION_ENTRY_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_ENTRY_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -111,7 +107,7 @@ The backend reads `body.data.id` from Notion's payload as the `thoughtId`, then 
 | Header | Value | Purpose |
 |---|---|---|
 | `x-cogdex-secret` | your secret | authentication |
-| `x-cogdex-page-type` | `User` / `Response` / `Canvas` / `Canvas Update` / `Compile` / `Branch` / `New Branch` / `User Comment` / `Reset` | which button was pressed |
+| `x-cogdex-page-type` | `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` / `Relink Databases` | which button was pressed |
 
 **Body:** Sent automatically by Notion — do not configure. Notion sends:
 ```json
@@ -146,20 +142,13 @@ Copy the Internal Integration Token → this is your `NOTION_TOKEN`.
 - `Open Ended?` (Checkbox)
 - `Date Deprecated` (Date)
 - `Build Github` (URL)
-- Buttons for triggering webhooks (`User`, `Response`, `Canvas`, `Compile`, `Branch`, `Reset`, etc.)
-
-**Branches** (columns):
-- `Name` (Title)
-- `Project` (Relation → Thought Management DB)
-- `Active` (Checkbox)
+- Buttons for triggering webhooks (`REG USR`, `REG RES`, `CNV EXP`, `REG EXP`, `Relink Databases`, etc.)
 
 **Entries** (columns):
 - `Title` (Title)
-- `Type` (Select): User, Response, Canvas, Compile, etc.
-- `Number` (Number)
+- `Type` (Select): REG USR, REG RES, CNV EXP, REG EXP, etc.
 - `Include` (Checkbox)
 - `Thought Management` (Relation → Thought Management DB)
-- `Branch` (Relation → Branches DB)
 - `Created` (Created time)
 
 **System Prompt** (columns):
