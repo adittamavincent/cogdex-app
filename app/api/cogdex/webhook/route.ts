@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
-import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD } from "@/lib/entries";
+import { notion } from "@/lib/notion";
+import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD, resolveDataSourceId } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -94,8 +95,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (pageType === "CNV RES") {
-      await handleCanvasUpdate(thoughtId);
-      return Response.json({ ok: true });
+      const pageObj = await notion.pages.retrieve({ page_id: thoughtId }) as any;
+      const parentId = pageObj?.parent?.database_id || pageObj?.parent?.data_source_id;
+      const entryDbIdResolved = await resolveDataSourceId(process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!);
+
+      if (parentId === entryDbIdResolved) {
+        await handleCanvasUpdate(thoughtId);
+        return Response.json({ ok: true });
+      } else {
+        const result = await createEntry({ thoughtId, pageType: "CNV RES" });
+        return Response.json({ ok: true, ...result });
+      }
     }
 
     if (pageType === "CNV UPD") {
