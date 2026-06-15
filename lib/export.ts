@@ -73,6 +73,7 @@ export async function readPageContent(pageId: string): Promise<string> {
     else if (type === "code") {
       const isDiff = (data as any)?.language === "diff" || text.startsWith("diff --git") || text.includes("diff --git");
       if (!isDiff) lines.push(`\`\`\`\n${text}\n\`\`\``);
+      else lines.push(text);
     }
     else if (type === "quote") lines.push(`> ${text}`);
     else if (type === "divider") lines.push(`---`);
