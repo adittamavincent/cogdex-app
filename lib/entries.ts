@@ -215,7 +215,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     const type = originalView.type || "table";
     const sorts = originalView.sorts || undefined;
     
-    let configuration = originalView.configuration || undefined;
+    let configuration = originalView.configuration ? JSON.parse(JSON.stringify(originalView.configuration)) : undefined;
     try {
       debug(`Retrieving actual schema for data source ${dataSourceId} to sanitize property configurations`);
       const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId }) as any;
@@ -243,6 +243,26 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
       }
     } catch (schemaErr) {
       warn(`Could not retrieve schema for data source ${dataSourceId} to sanitize configuration:`, schemaErr);
+    }
+
+    const isEntryOrCanvas = dataSourceId === ENTRY_DB_ID || dataSourceId === CANVAS_DB_ID || fallbackDataSourceId === ENTRY_DB_ID || fallbackDataSourceId === CANVAS_DB_ID;
+    if (isEntryOrCanvas) {
+      if (!configuration) {
+        configuration = { properties: [] };
+      }
+      if (!configuration.properties || !Array.isArray(configuration.properties)) {
+        configuration.properties = [];
+      }
+      const titleProp = configuration.properties.find((p: any) => p.property_id === "title");
+      if (titleProp) {
+        titleProp.width = 100;
+      } else {
+        configuration.properties.push({
+          property_id: "title",
+          visible: true,
+          width: 100
+        });
+      }
     }
 
     let filter = originalView.filter || undefined;
@@ -300,17 +320,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
 }
 
 export function isDiff(content: string): boolean {
-  if (/^@@\s+-\d+.*\+\d+.*@@/m.test(content)) {
-    return true;
-  }
-  const lines = content.split("\n");
-  let diffIndicators = 0;
-  for (const line of lines) {
-    if (line.startsWith("+") || line.startsWith("-")) {
-      diffIndicators++;
-    }
-  }
-  return diffIndicators > 0 || content.includes("--- ") || content.includes("+++ ");
+  return /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/m.test(content);
 }
 
 interface Hunk {
