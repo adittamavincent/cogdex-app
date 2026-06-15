@@ -1086,9 +1086,11 @@ async function getBranchesForProject(projectId: string, branchDbId: string) {
 export async function handleUserComment(thoughtId: string) {
   debug(`Starting handleUserComment for thought: ${thoughtId}`);
 
+  const entryDbIdResolved = await resolveDataSourceId(ENTRY_DB_ID);
+
   // 1. Get the 2 most recent entries for this project
   const recentResponse = await notion.dataSources.query({
-    data_source_id: ENTRY_DB_ID,
+    data_source_id: entryDbIdResolved,
     filter: {
       property: "Project",
       relation: { contains: thoughtId },
