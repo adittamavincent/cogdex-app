@@ -884,9 +884,15 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   const parentId = pageObj.parent.database_id || pageObj.parent.data_source_id;
   const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
+  const entryDbIdResolved = await resolveDataSourceId(ENTRY_DB_ID);
 
-  if (parentId === CANVAS_DB_ID || parentId === canvasDbIdResolved) {
-    debug(`Triggered page ${triggeredId} is a Canvas Entry`);
+  if (
+    parentId === CANVAS_DB_ID ||
+    parentId === canvasDbIdResolved ||
+    parentId === ENTRY_DB_ID ||
+    parentId === entryDbIdResolved
+  ) {
+    debug(`Triggered page ${triggeredId} is a Canvas/Entries Entry`);
     canvasEntryId = triggeredId;
     const projectProp = findProperty(pageObj.properties || {}, "Project");
     projectId = projectProp?.relation?.[0]?.id;
@@ -899,24 +905,28 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     let canvasPagesResponse;
     try {
       canvasPagesResponse = await notion.dataSources.query({
-        data_source_id: canvasDbIdResolved,
+        data_source_id: entryDbIdResolved,
         filter: {
           property: "Project", relation: { contains: projectId }
         },
-        sorts: [{ timestamp: "created_time", direction: "descending" }],
-        page_size: 1
+        sorts: [{ timestamp: "created_time", direction: "descending" }]
       });
     } catch (err: any) {
       if (err.code === "object_not_found") {
-        throw new Error(`Canvas DB not found. Ensure the Canvas DB is shared with the integration.`);
+        throw new Error(`Entries DB not found. Ensure the Entries DB is shared with the integration.`);
       }
       throw err;
     }
 
-    if (canvasPagesResponse.results.length === 0) {
+    const canvasEntries = canvasPagesResponse.results.filter((entry: any) => {
+      const type = findProperty(entry.properties || {}, "Type")?.select?.name;
+      return type === "CNV RES" || type === "CNV EXP";
+    });
+
+    if (canvasEntries.length === 0) {
       throw new Error(`No Canvas entry found for project ${projectId}.`);
     }
-    canvasEntryId = canvasPagesResponse.results[0].id;
+    canvasEntryId = canvasEntries[0].id;
   }
 
   // 1. Read diff content from target canvas page
@@ -932,14 +942,18 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   // 2. Find previous canvas page in this project
   const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: canvasDbIdResolved,
+    data_source_id: entryDbIdResolved,
     filter: {
       property: "Project", relation: { contains: projectId }
     },
     sorts: [{ timestamp: "created_time", direction: "descending" }]
   });
 
-  const results = canvasPagesResponse.results;
+  const results = canvasPagesResponse.results.filter((entry: any) => {
+    const type = findProperty(entry.properties || {}, "Type")?.select?.name;
+    return type === "CNV RES" || type === "CNV EXP";
+  });
+
   const currentIdx = results.findIndex(r => r.id === canvasEntryId);
   let previousCanvasId: string | null = null;
   if (currentIdx !== -1 && currentIdx + 1 < results.length) {
