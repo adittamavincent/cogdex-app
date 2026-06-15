@@ -1,6 +1,6 @@
 # Cogdex App
 
-A minimal Next.js (App Router) backend hosted on Vercel. Its sole job is to receive webhooks from Notion button automations and either create a new typed entry page in a Notion database, export selected entries and system prompts into a structured XML context block, manage project branches, apply code diff patches to canvas files, or reset database views.
+Minimal Next.js (App Router) backend hosted on Vercel. Receives webhooks from Notion button automations to manage typed entries, export structured XML contexts, apply git diff patches, sync canvas code, and restore project-scoped database views.
 
 No user-facing frontend. No auth system. No database other than Notion. Single-user personal tool.
 
@@ -8,21 +8,53 @@ No user-facing frontend. No auth system. No database other than Notion. Single-u
 
 ## What It Does
 
-| Webhook Action | Behaviour |
-|---|---|
-| `REG USR` / `REG RES` / `CNV EXP` | Creates a new typed page in the Entries database for the project. |
-| `CNV RES` | Reads git diff content from a Canvas page, applies patch to the previous Canvas page version, and appends the full version of the canvas code back below the diff block. |
-| `REG EXP` | Reads all `Include=true` Entries + System Prompts → builds a `<cogdex>` XML block → writes it to a new `REG EXP` entry page. |
-| `REG USR CMT` | Scans the previous entry, copies comments, and links references between the two most recent entries. |
-| `Relink Databases` | Wipes the current project page's blocks and clones the Entry and System Prompt database views inside it based on original template views. |
+Buttons in Notion send webhooks to the Cogdex API, configured with a custom header representing the action/page type.
 
-The compiled XML output can be exported from Notion as Markdown and pasted into any LLM as structured context.
+### Notion Page Types & Acronyms
+- **REG**: Regular
+- **CNV**: Canvas
+- **USR**: User
+- **RES**: Response
+- **EXP**: Export
+- **CMT**: Comment
 
-### Optimization & Formatting Design
+### Action Actions
 
-To prevent Vercel Serverless Function timeouts (`FUNCTION_INVOCATION_TIMEOUT`) and optimize Markdown exports, the compilation system is designed with:
-- **Parallel Content Fetching**: Page database queries and block structures are fetched concurrently via `Promise.all` instead of sequentially, reducing Notion API query time to a single concurrent batch.
-- **Grouped Multi-line Text Packing**: Rather than creating a separate Notion block for every line of XML (which triggers blank double-spacing in Markdown exports and requires hundreds of API calls), lines are grouped into paragraph blocks of up to 1900 characters (separated by `\n`). This results in a clean, raw, single-spaced Markdown output identical to local files, and reduces API write requests to just one or two per export job.
+| Webhook Action / Custom Header | Triggered From | Behavior |
+|---|---|---|
+| `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` | **Project Page** | Creates a new entry page in the **Entry** database linked to the project. |
+| `CNV RES` | **Entry Page** | Gathers previous version, applies git diff block patch, appends updated full file code back below diff. |
+| `CNV UPD` | **Project Page** | Gathers all `CNV RES` and `CNV EXP` entries for the project. Applies git diffs sequentially to construct latest file code. Writes updated content to a single Canvas page in the **Canvas** database (archives duplicates). Links project to canvas. |
+| `REG EXP` | **Project Page** (As exporting endpoint) | Gathers `Include=true` Entries + System Prompts + latest Canvas. Exports `<cogdex>` XML block. Writes output to new `REG EXP` page in the **Entry** database. |
+| `REG USR CMT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
+| `Relink Databases` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Canvas database views inside it based on template views, filtered to current Project. |
+
+---
+
+## Notion Database Schemas
+
+To sync properly with the codebase, configure these four databases in Notion:
+
+### 1. Project Database
+- `Name` (Title)
+- `Canvas` (Relation → Canvas DB, single select/limit to 1 page)
+
+### 2. Entry Database
+- `Name` (Title) — Stores the incremented entry number (e.g. `1`, `2`, `3`).
+- `Type` (Select) — Values: `REG USR`, `REG RES`, `CNV EXP`, `CNV RES`, `REG EXP`, `REG USR CMT`, `CNV UPD`.
+- `Include` (Checkbox) — Set to `true` to include in context exports (automatically unchecked for export entries like `REG EXP` and `CNV EXP`).
+- `Project` (Relation → Project DB)
+- `Entries Referenced` (Relation → Entry DB)
+- `System Prompt Used` (Relation → System Prompt DB)
+
+### 3. Canvas Database
+- `Name` (Title) — Holds latest chronological entry number.
+- `Project` (Relation → Project DB)
+
+### 4. System Prompt Database
+- `Name` (Title)
+- `Include` (Checkbox) — Set to `true` to include in context exports.
+- `Priority` (Number) — Sorting order for XML context blocks.
 
 ---
 
@@ -35,7 +67,7 @@ To prevent Vercel Serverless Function timeouts (`FUNCTION_INVOCATION_TIMEOUT`) a
 - **Hosting**: Vercel
 - **Notion SDK**: `@notionhq/client` v5 (uses `dataSources` and `views` API)
 
-> **Note on Notion SDK v5:** This project uses `@notionhq/client` v5 which introduced breaking changes from v4. `notion.databases.query()` is now `notion.dataSources.query({ data_source_id })` and `pages.create` uses `parent: { data_source_id }` instead of `parent: { database_id }`. The database IDs themselves are the same 32-char hex strings from the Notion URL.
+> **Note on Notion SDK v5:** `notion.databases.query()` is now `notion.dataSources.query({ data_source_id })` and `pages.create` uses `parent: { data_source_id }` instead of `parent: { database_id }`.
 
 ---
 
@@ -47,18 +79,18 @@ cogdex-app/
 │   ├── api/
 │   │   └── cogdex/
 │   │       └── webhook/
-│   │           └── route.ts       ← single webhook entry point
+│   │           └── route.ts       ← webhook endpoint
 │   ├── globals.css
 │   ├── layout.tsx
-│   └── page.tsx                   ← plain status page
+│   └── page.tsx                   ← status page
 ├── lib/
 │   ├── notion.ts                  ← Notion client singleton
-│   ├── entries.ts                 ← create entry, canvas, and reset logic
-│   ├── export.ts                  ← export + XML build logic
-│   ├── logger.ts                  ← centralized logging
-│   └── types.ts                   ← shared TypeScript types
-├── vercel.json                    ← maxDuration: 60 for export jobs
-├── .env.local                     ← not committed
+│   ├── entries.ts                 ← entry generation, diff patch, and views setup
+│   ├── export.ts                  ← XML context export logic
+│   ├── logger.ts                  ← logger utility
+│   └── types.ts                   ← TS types
+├── vercel.json                    ← maxDuration config
+├── .env.local                     ← local configuration
 └── package.json
 ```
 
@@ -66,33 +98,29 @@ cogdex-app/
 
 ## Environment Variables
 
-Create `.env.local` (never commit this file):
+Create `.env.local`:
 
 ```env
 NOTION_TOKEN=secret_xxxxxxxxxxxx
 COGDEX_WEBHOOK_SECRET=pick_a_long_random_string_here
 
-# Group 1: Project (No View ID required)
-NOTION_PROJECT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Group 2: Entry, Canvas, System Prompt (DB and View IDs)
+# Databases (IDs are 32-char hex strings)
 NOTION_ENTRY_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_ENTRY_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
+NOTION_SYSTEM_PROMPT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_CANVAS_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_BRANCH_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Templates for View Cloning
+NOTION_ENTRY_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_SYSTEM_PROMPT_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_CANVAS_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-NOTION_SYSTEM_PROMPT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_SYSTEM_PROMPT_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Optional: customize incoming headers (defaults shown below)
+# Optional: customize incoming headers
 COGDEX_SECRET_HEADER=x-cogdex-secret
 COGDEX_PAGE_TYPE_HEADER=x-cogdex-page-type
 ```
 
-Generate a secure secret: `openssl rand -hex 32`
-
-Set the same variables in **Vercel → Project → Settings → Environment Variables**.
+Set the same variables in Vercel.
 
 ---
 
@@ -100,25 +128,20 @@ Set the same variables in **Vercel → Project → Settings → Environment Vari
 
 **Endpoint:** `POST /api/cogdex/webhook`
 
-**How it works:** Each button in Thought Management sends a webhook. The `x-cogdex-page-type` header identifies which button was pressed. Notion automatically sends the current row's page data in the request body — no body configuration is needed by the user.
-
-The backend reads `body.data.id` from Notion's payload as the `thoughtId`, then triggers the corresponding action.
-
-**Headers (set by you in Notion — the only config):**
+**Headers:**
 
 | Header | Value | Purpose |
 |---|---|---|
 | `x-cogdex-secret` | your secret | authentication |
-| `x-cogdex-page-type` | `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` / `Relink Databases` | which button was pressed |
+| `x-cogdex-page-type` | `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` / `Relink Databases` / `CNV UPD` | action type |
 
-**Body:** Sent automatically by Notion — do not configure. Notion sends:
+**Body:** Notion sends page details automatically:
 ```json
 {
-  "source": { "automation_id": "...", "user_id": "...", ... },
+  "source": { "automation_id": "...", "user_id": "...", "action_id": "..." },
   "data": {
     "object": "page",
-    "id": "<Thought Management / Branch / Page ID>",
-    "parent": { "data_source_id": "<data source ID>" },
+    "id": "<Page ID>",
     "properties": {}
   }
 }
@@ -126,65 +149,15 @@ The backend reads `body.data.id` from Notion's payload as the `thoughtId`, then 
 
 ---
 
-## Notion Setup (one-time manual steps)
-
-### 1. Create Notion Integration
-
-Go to [https://www.notion.so/profile/integrations](https://www.notion.so/profile/integrations) → New integration named `Cogdex App`.  
-Capabilities needed: **Read content**, **Update content**, **Insert content**.  
-Copy the Internal Integration Token → this is your `NOTION_TOKEN`.
-
-### 2. Create Databases
-
-**Thought Management** (columns):
-- `Title` (Title)
-- `Fungsi` (Select)
-- `Outcome` (Select)
-- `Tag` (Multi-select)
-- `Open Ended?` (Checkbox)
-- `Date Deprecated` (Date)
-- `Build Github` (URL)
-- Buttons for triggering webhooks (`REG USR`, `REG RES`, `CNV EXP`, `REG EXP`, `Relink Databases`, etc.)
-
-**Entries** (columns):
-- `Title` (Title)
-- `Type` (Select): REG USR, REG RES, CNV EXP, REG EXP, etc.
-- `Include` (Checkbox)
-- `Thought Management` (Relation → Thought Management DB)
-- `Created` (Created time)
-
-**System Prompt** (columns):
-- `Name` (Title)
-- `Include` (Checkbox)
-- `Priority` (Number)
-
-Write system prompt content in the **page body** of each entry.
-
-### 3. Connect Integration to Databases
-
-For each database: open as full page → `...` → Connections → add `Cogdex App`.
-
-### 4. Get Database and View IDs
-
-Retrieve your Database IDs and their default View IDs from the URLs or via API and add them to your env configuration.
-
----
-
-## Deployment
+## Deployment & Dev
 
 ```bash
-pnpm build          # verify TypeScript compiles cleanly
-pnpm dlx vercel     # first deploy — follow prompts
-```
+# Verify build
+pnpm build
 
-After deploy, webhook URL: `https://<your-vercel-url>/api/cogdex/webhook`
+# Deploy to Vercel
+pnpm dlx vercel
 
----
-
-## Local Development
-
-```bash
+# Run local dev server
 pnpm dev
 ```
-
-Status page available at `http://localhost:3000`
