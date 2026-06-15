@@ -992,8 +992,9 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   const fullText = patchedLines.map(l => l.text).join("\n");
 
   // 4. Update blocks based on diff only (avoiding full wipe)
-  await updatePageBlocks(canvasEntryId, fullText, true);
-  debug(`Finished updating canvas page ${canvasEntryId} via block diffing`);
+  const forceWipe = results.length <= 1;
+  await updatePageBlocks(canvasEntryId, fullText, true, forceWipe);
+  debug(`Finished updating canvas page ${canvasEntryId} (forceWipe: ${forceWipe})`);
 
   // 5. Toggle off Include for other canvases, and toggle on for current canvas
   await Promise.all(
@@ -1363,8 +1364,9 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
   }
 
   // 5. Update content inside canvas page based on diff only
-  await updatePageBlocks(canvasPageId, currentContent, false);
-  debug(`Finished updating canvas page ${canvasPageId} with latest content via block diffing`);
+  const forceWipe = canvasEntries.length <= 1;
+  await updatePageBlocks(canvasPageId, currentContent, false, forceWipe);
+  debug(`Finished updating canvas page ${canvasPageId} with latest content (forceWipe: ${forceWipe})`);
 }
 
 function getRichTextPlain(rt: any[]): string {
@@ -1462,8 +1464,49 @@ function diffBlocks(
 export async function updatePageBlocks(
   pageId: string,
   newMarkdown: string,
-  keepFirstBlock: boolean = false
+  keepFirstBlock: boolean = false,
+  forceWipe: boolean = false
 ): Promise<void> {
+  if (forceWipe) {
+    debug(`forceWipe is true for ${pageId}, performing full clean & insert`);
+    let hasMore = true;
+    let startCursor: string | undefined = undefined;
+    let isFirstPage = true;
+
+    while (hasMore) {
+      const listResponse = await notion.blocks.children.list({
+        block_id: pageId,
+        start_cursor: startCursor,
+      });
+
+      if (listResponse.results.length > 0) {
+        const blocksToDelete = (keepFirstBlock && isFirstPage)
+          ? listResponse.results.slice(1)
+          : listResponse.results;
+        await Promise.all(
+          blocksToDelete.map((block) =>
+            notion.blocks.delete({ block_id: block.id })
+          )
+        );
+      }
+
+      isFirstPage = false;
+      hasMore = listResponse.has_more;
+      startCursor = listResponse.next_cursor ?? undefined;
+    }
+
+    let newBlocks = markdownToRichNotionBlocks(newMarkdown);
+    newBlocks = newBlocks.map(b => cleanBlock(b));
+    const CHUNK = 100;
+    for (let i = 0; i < newBlocks.length; i += CHUNK) {
+      await notion.blocks.children.append({
+        block_id: pageId,
+        children: newBlocks.slice(i, i + CHUNK) as any,
+      });
+    }
+    return;
+  }
+
   const existingBlocks: any[] = [];
   let hasMore = true;
   let startCursor: string | undefined = undefined;
