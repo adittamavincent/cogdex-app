@@ -963,7 +963,16 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   let baseContent = "";
   if (previousCanvasId) {
     debug(`Found previous canvas: ${previousCanvasId}`);
-    baseContent = await readPageContent(previousCanvasId);
+    const prevEntry = results.find(r => r.id === previousCanvasId);
+    const prevType = findProperty((prevEntry as any)?.properties || {}, "Type")?.select?.name;
+    const rawBase = await readPageContent(previousCanvasId);
+
+    if (prevType === "CNV EXP") {
+      const match = rawBase.match(/<entry\s+type="CNV EXP"[^>]*>([\s\S]*?)<\/entry>/);
+      baseContent = match ? match[1].trim() : "";
+    } else {
+      baseContent = unwrapCodeFences(rawBase);
+    }
   } else {
     debug(`No previous canvas found for project ${projectId}. Using empty content as base.`);
   }
@@ -1270,14 +1279,20 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
       latestEntryNumber = entryNum;
     }
 
+    const type = findProperty((entry as any).properties || {}, "Type")?.select?.name;
     const content = await readPageContent(entry.id);
-    const unwrapped = unwrapCodeFences(content);
 
-    if (isDiff(unwrapped)) {
-      const patchedLines = applyPatch(currentContent, unwrapped);
-      currentContent = patchedLines.map(l => l.text).join("\n");
+    if (type === "CNV EXP") {
+      const match = content.match(/<entry\s+type="CNV EXP"[^>]*>([\s\S]*?)<\/entry>/);
+      currentContent = match ? match[1].trim() : "";
     } else {
-      currentContent = unwrapped;
+      const unwrapped = unwrapCodeFences(content);
+      if (isDiff(unwrapped)) {
+        const patchedLines = applyPatch(currentContent, unwrapped);
+        currentContent = patchedLines.map(l => l.text).join("\n");
+      } else {
+        currentContent = unwrapped;
+      }
     }
   }
 
