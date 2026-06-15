@@ -990,46 +990,10 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   // 3. Apply git diff to get full text
   const patchedLines = applyPatch(baseContent, diffContent);
   const fullText = patchedLines.map(l => l.text).join("\n");
-  const newBlocks = markdownToRichNotionBlocks(fullText);
 
-  // 4. Delete all existing blocks EXCEPT the first code block, then append
-  let hasMore = true;
-  let startCursor: string | undefined = undefined;
-  let isFirstPage = true;
-
-  while (hasMore) {
-    const listResponse = await notion.blocks.children.list({
-      block_id: canvasEntryId,
-      start_cursor: startCursor,
-    });
-
-    if (listResponse.results.length > 0) {
-      // Keep the first block (which should be the diff code block), delete the rest
-      const blocksToDelete = isFirstPage ? listResponse.results.slice(1) : listResponse.results;
-      await Promise.all(
-        blocksToDelete.map((block) =>
-          notion.blocks.delete({ block_id: block.id })
-        )
-      );
-    }
-
-    isFirstPage = false;
-    hasMore = listResponse.has_more;
-    startCursor = listResponse.next_cursor ?? undefined;
-  }
-  debug("Wiped clean previous appended blocks inside canvas page");
-
-  // Clean read-only properties from Notion objects before appending
-  const cleanBlocks = newBlocks.map(b => cleanBlock(b));
-
-  const CHUNK = 100;
-  for (let i = 0; i < cleanBlocks.length; i += CHUNK) {
-    await notion.blocks.children.append({
-      block_id: canvasEntryId,
-      children: cleanBlocks.slice(i, i + CHUNK) as any,
-    });
-  }
-  debug(`Finished appending full version back to canvas page ${canvasEntryId}`);
+  // 4. Update blocks based on diff only (avoiding full wipe)
+  await updatePageBlocks(canvasEntryId, fullText, true);
+  debug(`Finished updating canvas page ${canvasEntryId} via block diffing`);
 
   // 5. Toggle off Include for other canvases, and toggle on for current canvas
   await Promise.all(
@@ -1398,39 +1362,242 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     warn(`Failed to link Project to Canvas:`, err);
   }
 
-  // 5. Update content inside canvas page (wipe clean then write new patched content)
+  // 5. Update content inside canvas page based on diff only
+  await updatePageBlocks(canvasPageId, currentContent, false);
+  debug(`Finished updating canvas page ${canvasPageId} with latest content via block diffing`);
+}
+
+function getRichTextPlain(rt: any[]): string {
+  return rt?.map((t: any) => t.plain_text).join("") ?? "";
+}
+
+function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>): string {
+  const type = block.type;
+  const data = block[type];
+  if (!data) return "";
+
+  switch (type) {
+    case "heading_1":
+      return `# ${getRichTextPlain(data.rich_text)}`;
+    case "heading_2":
+      return `## ${getRichTextPlain(data.rich_text)}`;
+    case "heading_3":
+      return `### ${getRichTextPlain(data.rich_text)}`;
+    case "bulleted_list_item":
+      return `- ${getRichTextPlain(data.rich_text)}`;
+    case "numbered_list_item":
+      return `1. ${getRichTextPlain(data.rich_text)}`;
+    case "quote":
+      return `> ${getRichTextPlain(data.rich_text)}`;
+    case "divider":
+      return `---`;
+    case "paragraph":
+      return getRichTextPlain(data.rich_text);
+    case "code":
+      return `\`\`\`\n${getRichTextPlain(data.rich_text)}\n\`\`\``;
+    case "table": {
+      const rows = childBlocksMap.get(block.id) || [];
+      const rowStrings = rows.map((row: any) => {
+        const cells = row.table_row?.cells || [];
+        const cellStrings = cells.map((cell: any) => cell.map((t: any) => t.plain_text).join(""));
+        return `| ${cellStrings.join(" | ")} |`;
+      });
+      if (rowStrings.length === 0) return "";
+      if (data.has_column_header) {
+        const colCount = rows[0].table_row?.cells?.length || 0;
+        const separator = `| ${Array(colCount).fill("---").join(" | ")} |`;
+        return [rowStrings[0], separator, ...rowStrings.slice(1)].join("\n");
+      }
+      return rowStrings.join("\n");
+    }
+    default:
+      return "";
+  }
+}
+
+function areBlocksEqual(b1md: string, b2md: string): boolean {
+  return b1md.trim() === b2md.trim();
+}
+
+function diffBlocks(
+  oldBlocks: { id?: string; md: string; raw: any }[],
+  newBlocks: { md: string; raw: any }[]
+): { action: "keep" | "delete" | "insert" | "update"; oldIdx?: number; newIdx?: number }[] {
+  const m = oldBlocks.length;
+  const n = newBlocks.length;
+  
+  const dp: number[][] = Array(m + 1).fill(0).map(() => Array(n + 1).fill(0));
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (areBlocksEqual(oldBlocks[i - 1].md, newBlocks[j - 1].md)) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+  
+  const diff: { action: "keep" | "delete" | "insert" | "update"; oldIdx?: number; newIdx?: number }[] = [];
+  let i = m;
+  let j = n;
+  
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && areBlocksEqual(oldBlocks[i - 1].md, newBlocks[j - 1].md)) {
+      diff.unshift({ action: "keep", oldIdx: i - 1, newIdx: j - 1 });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ action: "insert", newIdx: j - 1 });
+      j--;
+    } else {
+      diff.unshift({ action: "delete", oldIdx: i - 1 });
+      i--;
+    }
+  }
+  
+  return diff;
+}
+
+export async function updatePageBlocks(
+  pageId: string,
+  newMarkdown: string,
+  keepFirstBlock: boolean = false
+): Promise<void> {
+  const existingBlocks: any[] = [];
   let hasMore = true;
   let startCursor: string | undefined = undefined;
-
   while (hasMore) {
     const listResponse = await notion.blocks.children.list({
-      block_id: canvasPageId,
+      block_id: pageId,
       start_cursor: startCursor,
     });
-
-    if (listResponse.results.length > 0) {
-      await Promise.all(
-        listResponse.results.map((block) =>
-          notion.blocks.delete({ block_id: block.id })
-        )
-      );
-    }
-
+    existingBlocks.push(...listResponse.results);
     hasMore = listResponse.has_more;
     startCursor = listResponse.next_cursor ?? undefined;
   }
-  debug("Wiped clean all blocks inside canvas page");
 
-  const newBlocks = markdownToRichNotionBlocks(currentContent);
-  const cleanBlocks = newBlocks.map(b => cleanBlock(b));
-
-  const CHUNK = 100;
-  for (let i = 0; i < cleanBlocks.length; i += CHUNK) {
-    await notion.blocks.children.append({
-      block_id: canvasPageId,
-      children: cleanBlocks.slice(i, i + CHUNK) as any,
-    });
+  const childBlocksMap = new Map<string, any[]>();
+  for (const block of existingBlocks) {
+    if (block.type === "table" && block.has_children) {
+      const childrenRes = await notion.blocks.children.list({ block_id: block.id });
+      childBlocksMap.set(block.id, childrenRes.results);
+    }
   }
-  debug(`Finished updating canvas page ${canvasPageId} with latest content`);
+
+  let oldBlocksToSync = existingBlocks;
+  let firstBlockToKeep: any = null;
+  if (keepFirstBlock && existingBlocks.length > 0) {
+    firstBlockToKeep = existingBlocks[0];
+    oldBlocksToSync = existingBlocks.slice(1);
+  }
+
+  let newBlocks = markdownToRichNotionBlocks(newMarkdown);
+  newBlocks = newBlocks.map(b => cleanBlock(b));
+
+  const oldSerialized = oldBlocksToSync.map(b => ({
+    id: b.id,
+    type: b.type,
+    md: serializeBlockToMarkdown(b, childBlocksMap),
+    raw: b,
+  }));
+
+  const newSerialized = newBlocks.map(b => ({
+    type: b.type,
+    md: serializeBlockToMarkdown(b, new Map()),
+    raw: b,
+  }));
+
+  const diff = diffBlocks(oldSerialized, newSerialized);
+
+  const newBlockIds = new Map<number, string>();
+  if (keepFirstBlock && firstBlockToKeep) {
+    newBlockIds.set(-1, firstBlockToKeep.id);
+  }
+
+  const deletions: string[] = [];
+  const insertions: { newIdx: number; afterIdx: number }[] = [];
+
+  let oldPtr = 0;
+  let newPtr = 0;
+
+  for (const step of diff) {
+    if (step.action === "keep") {
+      newBlockIds.set(step.newIdx!, oldSerialized[step.oldIdx!].id);
+      oldPtr++;
+      newPtr++;
+    } else if (step.action === "delete") {
+      deletions.push(oldSerialized[step.oldIdx!].id);
+      oldPtr++;
+    } else if (step.action === "insert") {
+      insertions.push({ newIdx: step.newIdx!, afterIdx: step.newIdx! - 1 });
+      newPtr++;
+    }
+  }
+
+  for (const blockId of deletions) {
+    try {
+      await notion.blocks.delete({ block_id: blockId });
+    } catch (err) {
+      warn(`Failed to delete block ${blockId}:`, err);
+    }
+  }
+
+  for (const ins of insertions) {
+    const newBlock = newSerialized[ins.newIdx].raw;
+    const afterId = newBlockIds.get(ins.afterIdx);
+
+    try {
+      let createdBlock: any;
+      if (afterId) {
+        const res = await notion.blocks.children.append({
+          block_id: pageId,
+          children: [newBlock] as any,
+          after: afterId,
+        });
+        createdBlock = res.results?.[0];
+      } else {
+        const nextId = newBlockIds.get(ins.newIdx + 1);
+        if (nextId) {
+          const nextBlock = oldSerialized.find(b => b.id === nextId);
+          if (nextBlock) {
+            const blockType = newBlock.type as string;
+            await notion.blocks.update({
+              block_id: nextId,
+              [blockType]: (newBlock as any)[blockType],
+            } as any);
+            newBlockIds.set(ins.newIdx, nextId);
+            ins.newIdx = ins.newIdx + 1;
+            newBlockIds.delete(ins.newIdx);
+            const oldRaw = nextBlock.raw;
+            const res = await notion.blocks.children.append({
+              block_id: pageId,
+              children: [cleanBlock(oldRaw)] as any,
+              after: nextId,
+            });
+            createdBlock = res.results?.[0];
+          } else {
+            const res = await notion.blocks.children.append({
+              block_id: pageId,
+              children: [newBlock] as any,
+            });
+            createdBlock = res.results?.[0];
+          }
+        } else {
+          const res = await notion.blocks.children.append({
+            block_id: pageId,
+            children: [newBlock] as any,
+          });
+          createdBlock = res.results?.[0];
+        }
+      }
+
+      if (createdBlock) {
+        newBlockIds.set(ins.newIdx, createdBlock.id);
+      }
+    } catch (err) {
+      warn(`Failed to insert block at index ${ins.newIdx}:`, err);
+    }
+  }
 }
 
