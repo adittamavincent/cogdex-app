@@ -1553,93 +1553,102 @@ export async function updatePageBlocks(
 
   const diff = diffBlocks(oldSerialized, newSerialized);
 
-  const newBlockIds = new Map<number, string>();
+  const ops: ({ type: "delete"; id: string } | { type: "insert"; blocks: any[]; afterId?: string })[] = [];
+  
+  let currentInsertRun: any[] = [];
+  let lastKnownId: string | undefined = undefined;
   if (keepFirstBlock && firstBlockToKeep) {
-    newBlockIds.set(-1, firstBlockToKeep.id);
+    lastKnownId = firstBlockToKeep.id;
   }
-
-  const deletions: string[] = [];
-  const insertions: { newIdx: number; afterIdx: number }[] = [];
-
-  let oldPtr = 0;
-  let newPtr = 0;
 
   for (const step of diff) {
     if (step.action === "keep") {
-      newBlockIds.set(step.newIdx!, oldSerialized[step.oldIdx!].id);
-      oldPtr++;
-      newPtr++;
+      if (currentInsertRun.length > 0) {
+        ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
+        currentInsertRun = [];
+      }
+      lastKnownId = oldSerialized[step.oldIdx!].id;
     } else if (step.action === "delete") {
-      deletions.push(oldSerialized[step.oldIdx!].id);
-      oldPtr++;
+      if (currentInsertRun.length > 0) {
+        ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
+        currentInsertRun = [];
+      }
+      ops.push({ type: "delete", id: oldSerialized[step.oldIdx!].id });
     } else if (step.action === "insert") {
-      insertions.push({ newIdx: step.newIdx!, afterIdx: step.newIdx! - 1 });
-      newPtr++;
+      currentInsertRun.push(newSerialized[step.newIdx!].raw);
     }
   }
-
-  for (const blockId of deletions) {
-    try {
-      await notion.blocks.delete({ block_id: blockId });
-    } catch (err) {
-      warn(`Failed to delete block ${blockId}:`, err);
-    }
+  if (currentInsertRun.length > 0) {
+    ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
   }
 
-  for (const ins of insertions) {
-    const newBlock = newSerialized[ins.newIdx].raw;
-    const afterId = newBlockIds.get(ins.afterIdx);
-
-    try {
-      let createdBlock: any;
-      if (afterId) {
-        const res = await notion.blocks.children.append({
-          block_id: pageId,
-          children: [newBlock] as any,
-          after: afterId,
-        });
-        createdBlock = res.results?.[0];
-      } else {
-        const nextId = newBlockIds.get(ins.newIdx + 1);
-        if (nextId) {
-          const nextBlock = oldSerialized.find(b => b.id === nextId);
-          if (nextBlock) {
-            const blockType = newBlock.type as string;
-            await notion.blocks.update({
-              block_id: nextId,
-              [blockType]: (newBlock as any)[blockType],
-            } as any);
-            newBlockIds.set(ins.newIdx, nextId);
-            ins.newIdx = ins.newIdx + 1;
-            newBlockIds.delete(ins.newIdx);
-            const oldRaw = nextBlock.raw;
+  // Execute operations sequentially in batches
+  for (const op of ops) {
+    if (op.type === "delete") {
+      try {
+        await notion.blocks.delete({ block_id: op.id });
+      } catch (err) {
+        warn(`Failed to delete block ${op.id}:`, err);
+      }
+    } else if (op.type === "insert") {
+      try {
+        if (op.afterId) {
+          const CHUNK = 100;
+          let currentAfterId = op.afterId;
+          for (let k = 0; k < op.blocks.length; k += CHUNK) {
+            const chunkBlocks = op.blocks.slice(k, k + CHUNK);
             const res = await notion.blocks.children.append({
               block_id: pageId,
-              children: [cleanBlock(oldRaw)] as any,
-              after: nextId,
+              children: chunkBlocks as any,
+              after: currentAfterId,
             });
-            createdBlock = res.results?.[0];
-          } else {
-            const res = await notion.blocks.children.append({
-              block_id: pageId,
-              children: [newBlock] as any,
-            });
-            createdBlock = res.results?.[0];
+            if (res.results && res.results.length > 0) {
+              currentAfterId = res.results[res.results.length - 1].id;
+            }
           }
         } else {
-          const res = await notion.blocks.children.append({
-            block_id: pageId,
-            children: [newBlock] as any,
-          });
-          createdBlock = res.results?.[0];
-        }
-      }
+          // Prepend at index 0 (swap with first existing block if present)
+          if (oldSerialized.length > 0) {
+            const firstOldBlock = oldSerialized[0];
+            const firstNewBlock = op.blocks[0];
+            const blockType = firstNewBlock.type;
+            
+            await notion.blocks.update({
+              block_id: firstOldBlock.id,
+              [blockType]: firstNewBlock[blockType],
+            } as any);
 
-      if (createdBlock) {
-        newBlockIds.set(ins.newIdx, createdBlock.id);
+            const remainingNewBlocks = op.blocks.slice(1);
+            const restoreOldBlock = cleanBlock(firstOldBlock.raw);
+
+            const CHUNK = 100;
+            const prependedBlocks = [...remainingNewBlocks, restoreOldBlock];
+            let currentAfterId = firstOldBlock.id;
+            for (let k = 0; k < prependedBlocks.length; k += CHUNK) {
+              const chunkBlocks = prependedBlocks.slice(k, k + CHUNK);
+              const res = await notion.blocks.children.append({
+                block_id: pageId,
+                children: chunkBlocks as any,
+                after: currentAfterId,
+              });
+              if (res.results && res.results.length > 0) {
+                currentAfterId = res.results[res.results.length - 1].id;
+              }
+            }
+          } else {
+            const CHUNK = 100;
+            for (let k = 0; k < op.blocks.length; k += CHUNK) {
+              const chunkBlocks = op.blocks.slice(k, k + CHUNK);
+              await notion.blocks.children.append({
+                block_id: pageId,
+                children: chunkBlocks as any,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        warn(`Failed to execute insert operation:`, err);
       }
-    } catch (err) {
-      warn(`Failed to insert block at index ${ins.newIdx}:`, err);
     }
   }
 }
