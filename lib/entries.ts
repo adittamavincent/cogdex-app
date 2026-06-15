@@ -1398,10 +1398,10 @@ function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>
     case "code":
       return `\`\`\`\n${getRichTextPlain(data.rich_text)}\n\`\`\``;
     case "table": {
-      const rows = childBlocksMap.get(block.id) || [];
+      const rows = childBlocksMap.get(block.id) || data.children || [];
       const rowStrings = rows.map((row: any) => {
         const cells = row.table_row?.cells || [];
-        const cellStrings = cells.map((cell: any) => cell.map((t: any) => t.plain_text).join(""));
+        const cellStrings = cells.map((cell: any) => getRichTextPlain(cell));
         return `| ${cellStrings.join(" | ")} |`;
       });
       if (rowStrings.length === 0) return "";
@@ -1418,7 +1418,16 @@ function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>
 }
 
 function areBlocksEqual(b1md: string, b2md: string): boolean {
-  return b1md.trim() === b2md.trim();
+  // Normalize whitespace: replace multiple spaces with a single space.
+  // Normalize table separators: remove spaces around dashes in table separators.
+  // Ignore list numbering differences by normalizing all numbers to "1."
+  const norm = (s: string) => 
+    s.trim()
+     .replace(/\r\n/g, "\n")
+     .replace(/^\d+\.\s+/gm, "1. ")
+     .replace(/\s+/g, " ")
+     .replace(/\|\s*-+\s*/g, "|---");
+  return norm(b1md) === norm(b2md);
 }
 
 function diffBlocks(

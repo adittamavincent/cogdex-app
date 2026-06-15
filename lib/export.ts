@@ -76,10 +76,29 @@ export async function readPageContent(pageId: string): Promise<string> {
     }
     else if (type === "quote") lines.push(`> ${text}`);
     else if (type === "divider") lines.push(`---`);
+    else if (type === "table") {
+      const tableRows = await notion.blocks.children.list({ block_id: block.id });
+      const rowStrings = tableRows.results.map((rowBlock: any) => {
+        const cells = rowBlock.table_row?.cells || [];
+        const cellStrings = cells.map((cell: any) => {
+          return cell.map((t: any) => t.plain_text).join("");
+        });
+        return `| ${cellStrings.join(" | ")} |`;
+      });
+      if (rowStrings.length > 0) {
+        if ((data as any).has_column_header) {
+          const colCount = (tableRows.results[0] as any).table_row?.cells?.length || 0;
+          const separator = `| ${Array(colCount).fill("---").join(" | ")} |`;
+          lines.push([rowStrings[0], separator, ...rowStrings.slice(1)].join("\n"));
+        } else {
+          lines.push(rowStrings.join("\n"));
+        }
+      }
+    }
     else if (text) lines.push(text);
 
     // Recurse into children if present
-    if (block.has_children) {
+    if (block.has_children && type !== "table") {
       const childContent = await readPageContent(block.id);
       if (childContent) lines.push(childContent);
     }
