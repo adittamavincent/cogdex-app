@@ -1083,29 +1083,72 @@ async function getBranchesForProject(projectId: string, branchDbId: string) {
   return response.results as unknown as NotionPage[];
 }
 
-export async function handleUserComment(thoughtId: string) {
-  debug(`Starting handleUserComment for thought: ${thoughtId}`);
+export async function handleUserComment(triggeredId: string) {
+  debug(`Starting handleUserComment for ID: ${triggeredId}`);
 
   const entryDbIdResolved = await resolveDataSourceId(ENTRY_DB_ID);
 
-  // 1. Get the 2 most recent entries for this project
-  const recentResponse = await notion.dataSources.query({
-    data_source_id: entryDbIdResolved,
-    filter: {
-      property: "Project",
-      relation: { contains: thoughtId },
-    },
-    sorts: [{ timestamp: "created_time", direction: "descending" }],
-    page_size: 2,
-  });
+  const pageObj = await notion.pages.retrieve({ page_id: triggeredId }) as any;
+  const parentId = pageObj?.parent?.database_id || pageObj?.parent?.data_source_id;
 
-  if (recentResponse.results.length < 2) {
-    debug("Not enough entries to copy comments from.");
-    return;
+  let projectId = "";
+  let targetEntry: any = null;
+  let sourceEntry: any = null;
+
+  if (parentId === ENTRY_DB_ID || parentId === entryDbIdResolved) {
+    targetEntry = pageObj;
+    projectId = findProperty(pageObj.properties || {}, "Project")?.relation?.[0]?.id;
+    if (!projectId) {
+      throw new Error(`Entry ${triggeredId} is not linked to any Project.`);
+    }
+
+    const recentResponse = await notion.dataSources.query({
+      data_source_id: entryDbIdResolved,
+      filter: {
+        property: "Project",
+        relation: { contains: projectId },
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+    });
+
+    const results = recentResponse.results;
+    const targetIdx = results.findIndex((r: any) => r.id === triggeredId);
+    if (targetIdx !== -1 && targetIdx + 1 < results.length) {
+      sourceEntry = results[targetIdx + 1];
+    } else if (targetIdx === -1 && results.length > 0) {
+      sourceEntry = results.find((r: any) => r.id !== triggeredId);
+    }
+  } else {
+    projectId = triggeredId;
+
+    const recentResponse = await notion.dataSources.query({
+      data_source_id: entryDbIdResolved,
+      filter: {
+        property: "Project",
+        relation: { contains: projectId },
+      },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 1,
+    });
+
+    if (recentResponse.results.length > 0) {
+      sourceEntry = recentResponse.results[0];
+    }
+
+    const createResult = await createEntry({
+      thoughtId: projectId,
+      pageType: "REG USR CMT",
+    });
+
+    if (createResult.pageId) {
+      targetEntry = await notion.pages.retrieve({ page_id: createResult.pageId });
+    }
   }
 
-  const targetEntry = recentResponse.results[0]; // Newly created by automation
-  const sourceEntry = recentResponse.results[1]; // Previous entry to scan
+  if (!targetEntry || !sourceEntry) {
+    debug("Missing target or source entry. Cannot copy comments.");
+    return;
+  }
 
   debug(`Scanning source entry ${sourceEntry.id} for comments to attach to ${targetEntry.id}`);
 
@@ -1156,7 +1199,7 @@ export async function handleUserComment(thoughtId: string) {
       data_source_id: canvasDbIdResolved,
       filter: {
         property: "Project",
-        relation: { contains: thoughtId }
+        relation: { contains: projectId }
       }
     });
 
