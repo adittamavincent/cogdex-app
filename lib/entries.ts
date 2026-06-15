@@ -7,6 +7,25 @@ const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
 const CANVAS_DB_ID = process.env.NOTION_CANVAS_DB_ID!;
 
+const resolvedIds = new Map<string, string>();
+
+export async function resolveDataSourceId(dbId: string): Promise<string> {
+  if (!dbId) return dbId;
+  if (resolvedIds.has(dbId)) return resolvedIds.get(dbId)!;
+  try {
+    const db = await notion.databases.retrieve({ database_id: dbId }) as any;
+    if (db && db.data_sources && db.data_sources.length > 0) {
+      const dsId = db.data_sources[0].id;
+      resolvedIds.set(dbId, dsId);
+      return dsId;
+    }
+  } catch (err) {
+    // fallback
+  }
+  resolvedIds.set(dbId, dbId);
+  return dbId;
+}
+
 interface NotionPage {
   id: string;
   properties?: Record<string, {
@@ -61,13 +80,15 @@ export async function createEntry(params: {
   const { thoughtId, pageType } = params;
   const isExport = pageType === "REG EXP";
 
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+
   let entryCount = 0;
   let hasMore = true;
   let nextCursor: string | undefined = undefined;
 
   while (hasMore) {
     const res = await notion.dataSources.query({
-      data_source_id: ENTRY_DB_ID,
+      data_source_id: entryDbId,
       filter: { property: "Project", relation: { contains: thoughtId } },
       start_cursor: nextCursor,
     });
@@ -99,7 +120,7 @@ export async function createEntry(params: {
   const blocksToAppend = (!isExport && pageType !== "CNV EXP") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [];
 
   const createPayload: any = {
-    parent: { data_source_id: ENTRY_DB_ID },
+    parent: { data_source_id: entryDbId },
     properties,
     children: blocksToAppend,
   };
@@ -862,8 +883,9 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
   let projectId = "";
 
   const parentId = pageObj.parent.database_id || pageObj.parent.data_source_id;
+  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
 
-  if (parentId === CANVAS_DB_ID) {
+  if (parentId === CANVAS_DB_ID || parentId === canvasDbIdResolved) {
     debug(`Triggered page ${triggeredId} is a Canvas Entry`);
     canvasEntryId = triggeredId;
     const projectProp = findProperty(pageObj.properties || {}, "Project");
@@ -877,7 +899,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     let canvasPagesResponse;
     try {
       canvasPagesResponse = await notion.dataSources.query({
-        data_source_id: CANVAS_DB_ID,
+        data_source_id: canvasDbIdResolved,
         filter: {
           property: "Project", relation: { contains: projectId }
         },
@@ -910,7 +932,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   // 2. Find previous canvas page in this project
   const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: CANVAS_DB_ID,
+    data_source_id: canvasDbIdResolved,
     filter: {
       property: "Project", relation: { contains: projectId }
     },
@@ -1192,9 +1214,12 @@ export async function handleUserComment(thoughtId: string) {
 export async function handleCNVUPD(thoughtId: string): Promise<void> {
   debug(`Starting handleCNVUPD for Project ID: ${thoughtId}`);
 
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
+
   // 1. Gather all entries of type "CNV RES" and "CNV EXP" for the project
   const entriesResponse = await notion.dataSources.query({
-    data_source_id: ENTRY_DB_ID,
+    data_source_id: entryDbId,
     filter: {
       property: "Project",
       relation: { contains: thoughtId }
@@ -1244,7 +1269,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
 
   // 3. Find existing canvas page in Canvas DB for this project
   const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: CANVAS_DB_ID,
+    data_source_id: canvasDbIdResolved,
     filter: {
       property: "Project", relation: { contains: thoughtId }
     }
@@ -1275,7 +1300,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
   } else {
     debug(`Creating new canvas page in Canvas DB`);
     const canvasPage = await notion.pages.create({
-      parent: { data_source_id: CANVAS_DB_ID },
+      parent: { data_source_id: canvasDbIdResolved },
       properties: {
         Name: { title: [{ text: { content: latestEntryNumber || "1" } }] },
         Project: { relation: [{ id: thoughtId }] }

@@ -1,5 +1,5 @@
 import { notion } from "./notion";
-import { createEntry } from "./entries";
+import { createEntry, resolveDataSourceId } from "./entries";
 import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
@@ -91,8 +91,9 @@ export async function readPageContent(pageId: string): Promise<string> {
 // Fetch all Include=true entries for a project, excluding Compile
 // SDK v5: notion.dataSources.query({ data_source_id })
 async function getIncludedEntries(thoughtId: string) {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
   const response = await notion.dataSources.query({
-    data_source_id: ENTRY_DB_ID,
+    data_source_id: entryDbId,
     filter: {
       and: [
         { property: "Project", relation: { contains: thoughtId } },
@@ -116,8 +117,9 @@ async function getIncludedEntries(thoughtId: string) {
 // Fetch all Include=true system prompts, sorted by Priority
 // SDK v5: notion.dataSources.query({ data_source_id })
 async function getIncludedSystemPrompts() {
+  const sysPromptDbId = await resolveDataSourceId(SYSTEM_PROMPT_DB_ID);
   const response = await notion.dataSources.query({
-    data_source_id: SYSTEM_PROMPT_DB_ID,
+    data_source_id: sysPromptDbId,
     filter: { property: "Include", checkbox: { equals: true } },
     sorts: [{ property: "Priority", direction: "ascending" }],
   });
@@ -126,9 +128,10 @@ async function getIncludedSystemPrompts() {
 
 async function getLatestCanvas(thoughtId: string): Promise<NotionPage | null> {
   if (!CANVAS_DB_ID) return null;
+  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
   try {
     const response = await notion.dataSources.query({
-      data_source_id: CANVAS_DB_ID,
+      data_source_id: canvasDbIdResolved,
       filter: {
         property: "Project",
         relation: { contains: thoughtId }
