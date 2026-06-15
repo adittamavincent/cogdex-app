@@ -82,21 +82,23 @@ export async function createEntry(params: {
 
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
-  let entryCount = 0;
-  let hasMore = true;
-  let nextCursor: string | undefined = undefined;
+  const recentResponse = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: { property: "Project", relation: { contains: thoughtId } },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 1,
+  });
 
-  while (hasMore) {
-    const res = await notion.dataSources.query({
-      data_source_id: entryDbId,
-      filter: { property: "Project", relation: { contains: thoughtId } },
-      start_cursor: nextCursor,
-    });
-    entryCount += res.results.length;
-    hasMore = res.has_more;
-    nextCursor = res.next_cursor ?? undefined;
+  let nextNumber = 1;
+  if (recentResponse.results.length > 0) {
+    const latestEntry = recentResponse.results[0];
+    const nameProp = findProperty((latestEntry as any).properties || {}, "Name");
+    const latestTitle = nameProp?.title?.[0]?.plain_text ?? "";
+    const latestNum = parseInt(latestTitle, 10);
+    if (!isNaN(latestNum)) {
+      nextNumber = latestNum + 1;
+    }
   }
-  const nextNumber = entryCount + 1;
 
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: String(nextNumber) } }] },
@@ -1154,15 +1156,26 @@ export async function handleUserComment(triggeredId: string) {
 
   // Update properties
   try {
-    let inheritedTitle = "";
+    let finalTitle = findProperty((targetEntry as any).properties || {}, "Name")?.title?.[0]?.plain_text ?? "";
 
-    const nameProp = findProperty((sourceEntry as any).properties || {}, "Name");
-    inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
+    if (!finalTitle) {
+      const nameProp = findProperty((sourceEntry as any).properties || {}, "Name");
+      const inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
+      const sourceNum = parseInt(inheritedTitle, 10);
+      if (!isNaN(sourceNum)) {
+        finalTitle = String(sourceNum + 1);
+      } else {
+        finalTitle = inheritedTitle;
+      }
+    }
 
     const propertiesToUpdate: any = {
       "Entries Referenced": { relation: [{ id: sourceEntry.id }] },
-      Name: { title: inheritedTitle ? [{ text: { content: inheritedTitle } }] : [] }
     };
+
+    if (finalTitle) {
+      propertiesToUpdate.Name = { title: [{ text: { content: finalTitle } }] };
+    }
 
     const updatePayload: any = {
       page_id: targetEntry.id,
@@ -1170,7 +1183,7 @@ export async function handleUserComment(triggeredId: string) {
     };
 
     await notion.pages.update(updatePayload);
-    debug(`Updated targetEntry properties: EntriesReferenced=${sourceEntry.id}, Title=${inheritedTitle}`);
+    debug(`Updated targetEntry properties: EntriesReferenced=${sourceEntry.id}, Title=${finalTitle}`);
   } catch (err) {
     warn(`Failed to update targetEntry properties:`, err);
   }
