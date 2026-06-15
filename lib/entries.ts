@@ -1165,7 +1165,7 @@ export async function handleUserComment(thoughtId: string) {
     warn(`Failed to update targetEntry properties:`, err);
   }
 
-  // 2. Fetch all blocks from sourceEntry
+    // 2. Fetch all blocks from sourceEntry
   const blocks: any[] = [];
   let hasMore = true;
   let startCursor: string | undefined;
@@ -1180,16 +1180,54 @@ export async function handleUserComment(thoughtId: string) {
     startCursor = listResponse.next_cursor ?? undefined;
   }
 
-  // 3. For each block, fetch comments
+  // Fetch all blocks from the canvas page (if exists)
+  const canvasBlocks: any[] = [];
+  let canvasPageId = "";
+  try {
+    const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
+    const canvasPagesResponse = await notion.dataSources.query({
+      data_source_id: canvasDbIdResolved,
+      filter: {
+        property: "Project",
+        relation: { contains: thoughtId }
+      }
+    });
+
+    if (canvasPagesResponse.results.length > 0) {
+      canvasPageId = canvasPagesResponse.results[0].id;
+      let canvasHasMore = true;
+      let canvasStartCursor: string | undefined;
+      while (canvasHasMore) {
+        const listResponse = await notion.blocks.children.list({
+          block_id: canvasPageId,
+          start_cursor: canvasStartCursor,
+        });
+        canvasBlocks.push(...listResponse.results);
+        canvasHasMore = listResponse.has_more;
+        canvasStartCursor = listResponse.next_cursor ?? undefined;
+      }
+    }
+  } catch (err) {
+    warn("Failed to retrieve canvas page blocks for comments copy:", err);
+  }
+
+    // 3. For each block/page, fetch comments
   const newBlocks: any[] = [];
-  for (const block of blocks) {
+  const itemsToScan: Array<{ id: string; type: string; raw?: any }> = [
+    ...blocks.map(b => ({ id: b.id, type: b.type, raw: b })),
+    ...canvasBlocks.map(b => ({ id: b.id, type: b.type, raw: b })),
+    { id: sourceEntry.id, type: "page" },
+    ...(canvasPageId ? [{ id: canvasPageId, type: "page" }] : [])
+  ];
+
+  for (const item of itemsToScan) {
     try {
-      const commentsRes = await notion.comments.list({ block_id: block.id });
+      const commentsRes = await notion.comments.list({ block_id: item.id });
       if (commentsRes.results.length > 0) {
         // Find text content
         let blockTextRichText = [];
-        if (block[block.type] && block[block.type].rich_text) {
-          blockTextRichText = sanitizeRichText(block[block.type].rich_text);
+        if (item.type !== "page" && item.raw && item.raw[item.type] && item.raw[item.type].rich_text) {
+          blockTextRichText = sanitizeRichText(item.raw[item.type].rich_text);
         }
 
         if (blockTextRichText.length > 0) {
