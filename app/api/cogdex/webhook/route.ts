@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
       const canvasPage = await notion.pages.retrieve({ page_id: canvasId }) as any;
       
       const repoUrlProp = canvasPage.properties?.["Repo URL"] || Object.values(canvasPage.properties || {}).find((p: any) => p.id === "ySdk");
-      const repoUrl = repoUrlProp?.rich_text?.[0]?.plain_text;
+      const repoUrl = repoUrlProp?.rich_text?.[0]?.plain_text || repoUrlProp?.url;
       
       if (!repoUrl) {
         const canvasTitle = canvasPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
