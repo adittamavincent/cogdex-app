@@ -236,6 +236,8 @@ export async function POST(req: NextRequest) {
         throw err;
       }
 
+      repomixOutput += "\n\n😊";
+
       let activeEntryId = entryId;
       if (activeEntryId) {
         await updateExistingEntryProperties({
