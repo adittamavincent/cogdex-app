@@ -386,13 +386,50 @@ export function parseDiff(diffText: string): Hunk[] {
   return hunks;
 }
 
-function matchLines(baseLines: Array<{ text: string, type: "normal" | "added" }>, startIdx: number, searchLines: string[]): boolean {
-  for (let i = 0; i < searchLines.length; i++) {
-    if (baseLines[startIdx + i].text.trim() !== searchLines[i].trim()) {
-      return false;
+function normalizeText(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[*_~`]/g, "") // remove bold, italic, strikethrough, inline code
+    .replace(/^[-*+]\s+/, "") // remove bullet markers
+    .replace(/^\d+\.\s+/, "") // remove numbered list prefix
+    .replace(/\s+/g, " "); // collapse spaces
+}
+
+function matchLinesRelaxed(
+  baseLines: Array<{ text: string, type: "normal" | "added" }>,
+  baseIdx: number,
+  searchLines: string[]
+): { matchedLength: number } | null {
+  let b = baseIdx;
+  let s = 0;
+
+  while (s < searchLines.length) {
+    const sLine = searchLines[s].trim();
+    if (sLine === "") {
+      s++;
+      continue;
     }
+
+    // Find the next non-empty line in baseLines
+    while (b < baseLines.length && baseLines[b].text.trim() === "") {
+      b++;
+    }
+
+    if (b >= baseLines.length) {
+      return null;
+    }
+
+    const bLine = baseLines[b].text.trim();
+    if (normalizeText(bLine) !== normalizeText(sLine)) {
+      return null;
+    }
+
+    b++;
+    s++;
   }
-  return true;
+
+  return { matchedLength: b - baseIdx };
 }
 
 export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
@@ -426,20 +463,25 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
     const hintIndex = Math.max(0, hunk.oldStart - 1);
     let foundIndex = -1;
+    let matchedLength = 0;
     const maxOffset = Math.max(baseLines.length, 100);
 
     for (let offset = 0; offset < maxOffset; offset++) {
       const idxForward = hintIndex + offset;
-      if (idxForward + searchLines.length <= baseLines.length) {
-        if (matchLines(baseLines, idxForward, searchLines)) {
+      if (idxForward < baseLines.length) {
+        const matchResult = matchLinesRelaxed(baseLines, idxForward, searchLines);
+        if (matchResult) {
           foundIndex = idxForward;
+          matchedLength = matchResult.matchedLength;
           break;
         }
       }
       const idxBackward = hintIndex - offset;
-      if (offset > 0 && idxBackward >= 0 && idxBackward + searchLines.length <= baseLines.length) {
-        if (matchLines(baseLines, idxBackward, searchLines)) {
+      if (offset > 0 && idxBackward >= 0) {
+        const matchResult = matchLinesRelaxed(baseLines, idxBackward, searchLines);
+        if (matchResult) {
           foundIndex = idxBackward;
+          matchedLength = matchResult.matchedLength;
           break;
         }
       }
@@ -461,16 +503,22 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
       if (trimmedSearch.length > 0) {
         for (let offset = 0; offset < maxOffset; offset++) {
           const idxForward = hintIndex + offset;
-          if (idxForward + trimmedSearch.length <= baseLines.length) {
-            if (matchLines(baseLines, idxForward, trimmedSearch)) {
-              foundIndex = idxForward - startTrim;
+          if (idxForward < baseLines.length) {
+            const matchResult = matchLinesRelaxed(baseLines, idxForward, trimmedSearch);
+            if (matchResult) {
+              foundIndex = idxForward;
+              matchedLength = matchResult.matchedLength;
+              replaceLines.splice(0, replaceLines.length, ...trimmedReplace);
               break;
             }
           }
           const idxBackward = hintIndex - offset;
-          if (offset > 0 && idxBackward >= 0 && idxBackward + trimmedSearch.length <= baseLines.length) {
-            if (matchLines(baseLines, idxBackward, trimmedSearch)) {
-              foundIndex = idxBackward - startTrim;
+          if (offset > 0 && idxBackward >= 0) {
+            const matchResult = matchLinesRelaxed(baseLines, idxBackward, trimmedSearch);
+            if (matchResult) {
+              foundIndex = idxBackward;
+              matchedLength = matchResult.matchedLength;
+              replaceLines.splice(0, replaceLines.length, ...trimmedReplace);
               break;
             }
           }
@@ -479,7 +527,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
     }
 
     if (foundIndex !== -1) {
-      baseLines.splice(foundIndex, searchLines.length, ...replaceLines);
+      baseLines.splice(foundIndex, matchedLength, ...replaceLines);
     } else {
       if (baseText.trim() === "") {
         return replaceLines;
