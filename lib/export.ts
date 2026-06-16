@@ -210,14 +210,30 @@ Do NOT include: conversation history, reasoning, drafts, or TODO lists.
 `;
     } else {
       return `${commonHeader}
-## Canvas Output Mode (Full Document Required)
-No previous Canvas exists. You MUST output the full Canvas document.
+## Canvas Output Mode (Full Document or Git Diff)
+If a Canvas has ALREADY been created/defined in this chat session OR is present in the <context> below (e.g. as a CNV RES/CNV EXP entry), you MUST output a unified git diff representing the changes.
+Otherwise (if this is the absolute first Canvas initialization and no Canvas exists in history/chat memory yet), you MUST output the full Canvas document.
 
-### Strictly Paste-Ready Contract
+### Option A: Full Document (First Time Only)
 - Output the complete Canvas content as plain markdown.
 - Do NOT wrap it in a diff block or code block.
 - Do NOT add \`+\` prefixes.
 - This will be pasted directly into the blank Notion Canvas page.
+
+### Option B: Git Diff (If Canvas Already Exists in Memory/Context)
+- **Fenced Code Block ONLY**: The diff MUST be wrapped in a code block with the \`diff\` language tag:
+  \`\`\`diff
+  @@ -1,5 +1,7 @@
+   unchanged line
+  -removed line
+  +added line
+  +new line
+  \`\`\`
+- **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
+- **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
+- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Canvas entry.
+- **Scope**: Include only changed regions.
+- **No Full Document**: Do NOT output the full canvas document. Output ONLY the diff code block.
 
 ### Canvas Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
@@ -260,7 +276,8 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  lines.push(getDefaultProtocol(isCanvasExport, latestCanvas !== null));
+  const hasCanvas = (latestCanvas !== null) || entries.some((e) => e.properties?.Type?.select?.name === "CNV RES");
+  lines.push(getDefaultProtocol(isCanvasExport, hasCanvas));
   if (promptContents.length > 0) {
     lines.push("");
     lines.push(promptContents.join("\n\n"));
