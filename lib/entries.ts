@@ -104,7 +104,7 @@ export async function createEntry(params: {
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: String(nextNumber) } }] },
     Type: { select: { name: pageType } },
-    Include: { checkbox: pageType !== "REG EXP" && pageType !== "CNV EXP" },
+    Include: { checkbox: pageType !== "REG EXP" && pageType !== "CNV EXP" && pageType !== "CNV RES" },
     Project: { relation: [{ id: thoughtId }] },
   };
 

@@ -120,6 +120,7 @@ async function getIncludedEntries(thoughtId: string) {
         { property: "Include", checkbox: { equals: true } },
         { property: "Type", select: { does_not_equal: "REG EXP" } },
         { property: "Type", select: { does_not_equal: "CNV EXP" } },
+        { property: "Type", select: { does_not_equal: "CNV RES" } },
       ],
     },
   });
