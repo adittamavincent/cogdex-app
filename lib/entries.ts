@@ -600,7 +600,7 @@ function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<s
   let remaining = text;
   if (!remaining) return [];
 
-  const regex = /(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(`(.*?)`)|(?:\[(.*?)\]\((.*?)\))/g;
+  const regex = /(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(`([^`]+)`)|(?:\[(.*?)\]\((.*?)\))/g;
   let lastIndex = 0;
   let match;
 
