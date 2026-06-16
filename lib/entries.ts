@@ -283,25 +283,33 @@ export async function handleSystemLink(thoughtId: string): Promise<void> {
   ]);
 
   // 2. Wipe clean all blocks inside the current page
-  let hasMore = true;
-  let startCursor: string | undefined = undefined;
-
-  while (hasMore) {
-    const listResponse = await notion.blocks.children.list({
-      block_id: thoughtId,
-      start_cursor: startCursor,
+  try {
+    await (notion.pages.update as any)({
+      page_id: thoughtId,
+      erase_content: true
     });
+  } catch (err) {
+    warn("Failed to use erase_content, falling back to manual block deletion", err);
+    let hasMore = true;
+    let startCursor: string | undefined = undefined;
 
-    if (listResponse.results.length > 0) {
-      await Promise.all(
-        listResponse.results.map((block) =>
-          notion.blocks.delete({ block_id: block.id })
-        )
-      );
+    while (hasMore) {
+      const listResponse = await notion.blocks.children.list({
+        block_id: thoughtId,
+        start_cursor: startCursor,
+      });
+
+      if (listResponse.results.length > 0) {
+        await Promise.all(
+          listResponse.results.map((block) =>
+            notion.blocks.delete({ block_id: block.id })
+          )
+        );
+      }
+
+      hasMore = listResponse.has_more;
+      startCursor = listResponse.next_cursor ?? undefined;
     }
-
-    hasMore = listResponse.has_more;
-    startCursor = listResponse.next_cursor ?? undefined;
   }
   debug("Wiped clean all blocks inside project page");
 
@@ -1886,20 +1894,35 @@ export async function updatePageBlocks(
   if (forceWipe || (isCompletelyDifferent && oldSerialized.length > 0)) {
     debug(`Similarity ratio is ${similarityRatio.toFixed(2)}. Wiping and replacing blocks.`);
     
-    const topLevelBlocksToDelete = oldBlocksToSync.filter(b => b.parentBlockId === pageId);
-    
-    const CHUNK = 50;
-    for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
-      const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
-      await Promise.all(
-        chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
-      );
+    let manualWipeNeeded = true;
+    if (!keepFirstBlock) {
+      try {
+        await (notion.pages.update as any)({
+          page_id: pageId,
+          erase_content: true
+        });
+        manualWipeNeeded = false;
+      } catch (err) {
+        warn(`Failed to use erase_content on page ${pageId}, falling back to manual deletion:`, err);
+      }
     }
 
-    for (let i = 0; i < newBlocks.length; i += CHUNK) {
+    if (manualWipeNeeded) {
+      const topLevelBlocksToDelete = oldBlocksToSync.filter(b => b.parentBlockId === pageId);
+      
+      const CHUNK = 50;
+      for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
+        const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
+        await Promise.all(
+          chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
+        );
+      }
+    }
+
+    for (let i = 0; i < newBlocks.length; i += 50) {
       await notion.blocks.children.append({
         block_id: pageId,
-        children: newBlocks.slice(i, i + CHUNK) as any,
+        children: newBlocks.slice(i, i + 50) as any,
       });
     }
     return;
