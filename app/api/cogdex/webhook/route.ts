@@ -24,6 +24,16 @@ const VALID_PAGE_TYPES: PageType[] = [
   "REPO SNAP",
 ];
 
+const CREATABLE_ENTRY_TYPES: PageType[] = [
+  "CHAT USER",
+  "CHAT RESP",
+  "MEMO EXPO",
+  "MEMO RESP",
+  "CHAT EXPO",
+  "CHAT CMNT",
+  "REPO SNAP",
+];
+
 export async function POST(req: NextRequest) {
   // --- Auth ---
   const incomingSecret =
@@ -96,7 +106,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-  } else {
+  } else if (CREATABLE_ENTRY_TYPES.includes(pageType)) {
     entryId = await findRecentEmptyEntry(projectId, pageType);
   }
 
