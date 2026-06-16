@@ -980,16 +980,16 @@ function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<s
 
     if (match[1] !== undefined) {
       tokens.push({ text: match[2], type: "bold" });
+    } else if (match[3] !== undefined) {
+      tokens.push({ text: match[4], type: "italic" });
     } else if (match[5] !== undefined) {
       tokens.push({ text: match[6], type: "italic" });
     } else if (match[7] !== undefined) {
-      tokens.push({ text: match[8], type: "italic" });
+      tokens.push({ text: match[8], type: "strikethrough" });
     } else if (match[9] !== undefined) {
-      tokens.push({ text: match[10], type: "strikethrough" });
-    } else if (match[11] !== undefined) {
-      tokens.push({ text: match[12], type: "code" });
-    } else if (match[13] !== undefined && match[14] !== undefined) {
-      tokens.push({ text: match[13], url: match[14], type: "link" });
+      tokens.push({ text: match[10], type: "code" });
+    } else if (match[11] !== undefined && match[12] !== undefined) {
+      tokens.push({ text: match[11], url: match[12], type: "link" });
     } else {
       tokens.push({ text: match[0], type: "text" });
     }
