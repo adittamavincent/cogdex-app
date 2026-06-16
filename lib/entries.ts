@@ -571,14 +571,33 @@ export function parseDiff(diffText: string): Hunk[] {
   return hunks;
 }
 
+// Code fence lines — must be handled transparently when LLMs omit them from diff context.
+// They are skipped when matching prose lines and re-emitted in the output unchanged.
+function isCodeFenceLine(trimmed: string): boolean {
+  return /^`{3,}/.test(trimmed);
+}
+
+// Structural lines that require EXACT match when they appear in the diff context.
+// These lines must not be fuzzy-normalized since their normalized form is ambiguous.
+function isExactMatchStructural(trimmed: string): boolean {
+  // Code fence: ``` or ```lang
+  if (/^`{3,}/.test(trimmed)) return true;
+  // Horizontal rule / front-matter divider (only pure --- *** ___ patterns)
+  if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return true;
+  // Table separator row: | --- | --- |
+  if (/^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(trimmed)) return true;
+  return false;
+}
+
 function normalizeText(text: string): string {
   return text
     .trim()
     .toLowerCase()
-    .replace(/[*_~`]/g, "") // remove bold, italic, strikethrough, inline code
-    .replace(/^[-*+]\s+/, "") // remove bullet markers
-    .replace(/^\d+\.\s+/, "") // remove numbered list prefix
-    .replace(/\s+/g, " "); // collapse spaces
+    .replace(/^#{1,6}\s+/, "")  // strip heading markers (## Repository → repository)
+    .replace(/[*_~`]/g, "")    // remove bold, italic, strikethrough, inline code
+    .replace(/^[-*+]\s+/, "")   // remove bullet markers
+    .replace(/^\d+\.\s+/, "")   // remove numbered list prefix
+    .replace(/\s+/g, " ");      // collapse spaces
 }
 
 function matchLinesRelaxed(
@@ -592,14 +611,42 @@ function matchLinesRelaxed(
 
   while (s < searchLines.length) {
     const sLine = searchLines[s].trim();
+
     if (sLine === "") {
+      // Blank search line: advance past a single blank base line if present.
+      // Never skip past non-blank base lines.
+      if (b < baseLines.length && baseLines[b].text.trim() === "") {
+        b++;
+      }
       s++;
       continue;
     }
 
-    // Find the next non-empty line in baseLines
-    while (b < baseLines.length && baseLines[b].text.trim() === "") {
+    // For structural search lines that require exact match (fences, dividers,
+    // table separators): skip blank base lines, then require exact trimmed match.
+    if (isExactMatchStructural(sLine)) {
+      while (b < baseLines.length && baseLines[b].text.trim() === "") {
+        b++;
+      }
+      if (b >= baseLines.length) return null;
+      const bLine = baseLines[b].text.trim();
+      if (bLine !== sLine) return null;
+      mapping[s] = b;
       b++;
+      s++;
+      continue;
+    }
+
+    // For normal prose lines: skip blank base lines, code fence lines, AND
+    // horizontal divider lines (---) that LLMs frequently omit from diff context.
+    // These skipped base lines are preserved in the output via the reconstruction loop.
+    while (b < baseLines.length) {
+      const bTrimmed = baseLines[b].text.trim();
+      if (bTrimmed === "" || isCodeFenceLine(bTrimmed) || /^(-{3,}|\*{3,}|_{3,})$/.test(bTrimmed)) {
+        b++;
+      } else {
+        break;
+      }
     }
 
     if (b >= baseLines.length) {
