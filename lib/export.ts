@@ -1,5 +1,5 @@
 import { notion } from "./notion";
-import { createEntry, resolveDataSourceId } from "./entries";
+import { createEntry, resolveDataSourceId, unwrapCodeFences, isDiff, applyPatch } from "./entries";
 import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
@@ -258,6 +258,77 @@ Produce a regular response entry answering the user's intent.
   }
 }
 
+// Fetch the latest canvas content, falling back to reconstructing from Entries DB if Canvas DB doesn't have it.
+async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage | null): Promise<{ content: string; title: string } | null> {
+  if (latestCanvasPage) {
+    try {
+      const canvasContent = await readPageContent(latestCanvasPage.id);
+      if (canvasContent && canvasContent.trim()) {
+        const title = latestCanvasPage.properties?.Name?.title?.[0]?.plain_text ?? latestCanvasPage.properties?.Title?.title?.[0]?.plain_text ?? "Canvas";
+        return { content: canvasContent.trim(), title };
+      }
+    } catch (err) {
+      console.warn(`Failed to read canvas page ${latestCanvasPage.id}, falling back to Entries DB:`, err);
+    }
+  }
+
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: {
+      property: "Project",
+      relation: { contains: thoughtId }
+    }
+  });
+
+  const canvasEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
+    const type = entry.properties?.Type?.select?.name;
+    return type === "CNV RES" || type === "CNV EXP";
+  });
+
+  if (canvasEntries.length === 0) {
+    return null;
+  }
+
+  canvasEntries.sort((a, b) => {
+    const nameA = a.properties?.Name?.title?.[0]?.plain_text ?? a.properties?.Title?.title?.[0]?.plain_text ?? "";
+    const nameB = b.properties?.Name?.title?.[0]?.plain_text ?? b.properties?.Title?.title?.[0]?.plain_text ?? "";
+    const numA = parseInt(nameA.match(/\d+/)?.[0] ?? "0", 10);
+    const numB = parseInt(nameB.match(/\d+/)?.[0] ?? "0", 10);
+    return numA - numB;
+  });
+
+  let currentContent = "";
+  let latestTitle = "Canvas";
+
+  for (const entry of canvasEntries) {
+    const name = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
+    if (name) latestTitle = name;
+
+    const type = entry.properties?.Type?.select?.name;
+    const content = await readPageContent(entry.id);
+
+    if (type === "CNV EXP") {
+      const match = content.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
+      currentContent = match ? match[1].trim() : "";
+    } else {
+      const unwrapped = unwrapCodeFences(content);
+      if (isDiff(unwrapped)) {
+        const patchedLines = applyPatch(currentContent, unwrapped);
+        currentContent = patchedLines.map(l => l.text).join("\n");
+      } else {
+        currentContent = unwrapped;
+      }
+    }
+  }
+
+  if (currentContent.trim()) {
+    return { content: currentContent, title: latestTitle };
+  }
+
+  return null;
+}
+
 // Build the full XML context string and return the involved entry/prompt IDs
 async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
   const [entries, prompts, latestCanvas] = await Promise.all([
@@ -267,17 +338,17 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
   ]);
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
-  const [promptContents, entryContents, canvasContent] = await Promise.all([
+  const [promptContents, entryContents, canvasContentObj] = await Promise.all([
     Promise.all(prompts.map((p) => readPageContent(p.id))),
     Promise.all(entries.map((entry) => readPageContent(entry.id))),
-    latestCanvas ? readPageContent(latestCanvas.id) : Promise.resolve(null),
+    getCanvasContent(thoughtId, latestCanvas),
   ]);
 
   const lines: string[] = [];
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  const hasCanvas = (latestCanvas !== null) || entries.some((e) => e.properties?.Type?.select?.name === "CNV RES");
+  const hasCanvas = (latestCanvas !== null) || (canvasContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "CNV RES");
   lines.push(getDefaultProtocol(isCanvasExport, hasCanvas));
   if (promptContents.length > 0) {
     lines.push("");
@@ -300,11 +371,10 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
     lines.push(`  </entry>`);
   }
 
-  if (latestCanvas && canvasContent) {
-    const title = latestCanvas.properties?.Name?.title?.[0]?.plain_text ?? "";
-    const tAttr = title.replace(/"/g, '&quot;');
-    lines.push(`  <entry type="CNV EXP" title="${tAttr}">`);
-    lines.push(canvasContent);
+  if (canvasContentObj) {
+    const tAttr = canvasContentObj.title.replace(/"/g, '&quot;');
+    lines.push(`  <entry type="CNV" title="${tAttr}">`);
+    lines.push(canvasContentObj.content);
     lines.push(`  </entry>`);
   }
   lines.push("</context>");

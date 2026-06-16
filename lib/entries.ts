@@ -1039,7 +1039,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     const rawBase = await readPageContent(previousCanvasId);
 
     if (prevType === "CNV EXP") {
-      const match = rawBase.match(/<entry\s+type="CNV EXP"[^>]*>([\s\S]*?)<\/entry>/);
+      const match = rawBase.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
       baseContent = match ? match[1].trim() : "";
     } else {
       baseContent = unwrapCodeFences(rawBase);
@@ -1416,7 +1416,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     const content = await readPageContent(entry.id);
 
     if (type === "CNV EXP") {
-      const match = content.match(/<entry\s+type="CNV EXP"[^>]*>([\s\S]*?)<\/entry>/);
+      const match = content.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
