@@ -1,6 +1,7 @@
 import { notion } from "./notion";
 import { createEntry, resolveDataSourceId, unwrapCodeFences, isDiff, applyPatch, updateExistingEntryProperties } from "./entries";
 import type { BlockObjectRequest } from "@notionhq/client";
+import type { PageType } from "./types";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
@@ -214,7 +215,8 @@ async function getIncludedEntries(thoughtId: string) {
     "MEMO RESP",
     "MEMO UPDT",
     "REPO SNAP",
-    "SYST LINK"
+    "SYST LINK",
+    "TASK EXPO"
   ]);
 
   const entries = rawEntries.filter((e) => {
@@ -266,7 +268,7 @@ async function getLatestMemorandum(thoughtId: string): Promise<NotionPage | null
   }
 }
 
-function getDefaultProtocol(isMemorandumExport: boolean, hasMemorandum: boolean): string {
+function getDefaultProtocol(exportType: PageType | boolean, hasMemorandum: boolean): string {
   const commonHeader = `# Cogdex Operational Protocol
 
 This prompt establishes the protocol between the LLM and the Notion-based Cogdex workspace.
@@ -278,6 +280,28 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 3. Earlier entries are immutable history. Do not recreate them.
 4. If context is incomplete/ambiguous, state the gap explicitly.
 `;
+
+  const isMemorandumExport = exportType === true || exportType === "MEMO EXPO";
+  const isTaskExport = exportType === "TASK EXPO";
+
+  if (isTaskExport) {
+    return `${commonHeader}
+## Task Output Mode (Agent Execution Prompt)
+You MUST generate an "Agent Execution Prompt" ready to be copied and pasted to an AI IDE (like Cursor, Windsurf, or Aider) to execute the task.
+
+### Strictly Paste-Ready Output Contract
+- **No filler/pleasantries**: Never start with "Here is your task:", "Sure!", etc. Do not end with conversational text.
+- **No metadata headers**: Do not prepend filename headers, dates, or wrap the entire output in a triple-backtick block.
+- **Raw markdown only**: Immediate paste-able into a Notion page body.
+- **Start exactly**: Start your response immediately with the text: "Tugas eksekusi untuk agent: "
+
+### Task Content & Structure Requirements (Option A)
+1. **Goal / Task Brief**: Start directly with the text "Tugas eksekusi untuk agent:" followed by the main objective.
+2. **No full code**: Do not write the full code implementation. Keep it concise.
+3. **List of files**: Provide the list of files that MUST be edited.
+4. **Step-by-step instructions**: Provide clear step-by-step logic change instructions.
+`;
+  }
 
   if (isMemorandumExport) {
     if (hasMemorandum) {
@@ -459,7 +483,7 @@ async function getLatestRepoSnap(thoughtId: string): Promise<string | null> {
 }
 
 // Build the full XML context string and return the involved entry/prompt IDs
-async function buildXML(thoughtId: string, isMemorandumExport: boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
+async function buildXML(thoughtId: string, exportType: PageType | boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
   const [entries, prompts, latestMemorandum, latestRepoSnap] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
@@ -479,7 +503,7 @@ async function buildXML(thoughtId: string, isMemorandumExport: boolean = false):
   lines.push("");
   lines.push("<protocol>");
   const hasMemorandum = (latestMemorandum !== null) || (memorandumContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "MEMO RESP");
-  lines.push(getDefaultProtocol(isMemorandumExport, hasMemorandum));
+  lines.push(getDefaultProtocol(exportType, hasMemorandum));
   if (promptContents.length > 0) {
     lines.push("");
     lines.push(promptContents.join("\n\n"));
@@ -586,20 +610,28 @@ function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
 
 export async function exportAndCreate(
   thoughtId: string,
-  isMemorandumExport: boolean = false,
+  exportType: PageType | boolean = false,
   existingEntryId?: string
 ): Promise<void> {
-  const { xml, entryIds, promptIds } = await buildXML(thoughtId, isMemorandumExport);
+  const isMemorandumExport = exportType === true || exportType === "MEMO EXPO";
+  const { xml, entryIds, promptIds } = await buildXML(thoughtId, exportType);
 
   // Prepend <memorandum> if needed
   const finalXml = isMemorandumExport ? `<memorandum>\n\n${xml}` : xml;
+
+  let targetPageType: PageType;
+  if (typeof exportType === "string") {
+    targetPageType = exportType;
+  } else {
+    targetPageType = exportType ? "MEMO EXPO" : "CHAT EXPO";
+  }
 
   let pageId = existingEntryId;
   if (pageId) {
     await updateExistingEntryProperties({
       entryId: pageId,
       projectId: thoughtId,
-      pageType: isMemorandumExport ? "MEMO EXPO" : "CHAT EXPO",
+      pageType: targetPageType,
       entriesReferencedIds: entryIds,
       systemPromptsUsedIds: promptIds,
     });
@@ -607,7 +639,7 @@ export async function exportAndCreate(
     // Create the Export entry page
     const res = await createEntry({
       thoughtId,
-      pageType: isMemorandumExport ? "MEMO EXPO" : "CHAT EXPO",
+      pageType: targetPageType,
       entriesReferencedIds: entryIds,
       systemPromptsUsedIds: promptIds,
     });

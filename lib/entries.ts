@@ -62,6 +62,8 @@ const TEMPLATES: Record<PageType, string> = {
   "SYST LINK": "",
   "MEMO UPDT": "",
   "REPO SNAP": "",
+  "TASK EXPO": "",
+  "TASK RESP": "",
 };
 
 export function findProperty(properties: Record<string, any>, name: string): any {
@@ -117,7 +119,8 @@ export async function createEntry(params: {
     "MEMO RESP",
     "REPO SNAP",
     "MEMO UPDT",
-    "SYST LINK"
+    "SYST LINK",
+    "TASK EXPO"
   ]);
 
   const properties: Record<string, unknown> = {
@@ -174,7 +177,8 @@ export async function updateExistingEntryProperties(params: {
     "MEMO RESP",
     "REPO SNAP",
     "MEMO UPDT",
-    "SYST LINK"
+    "SYST LINK",
+    "TASK EXPO"
   ]);
 
   const properties: Record<string, unknown> = {

@@ -22,6 +22,8 @@ const VALID_PAGE_TYPES: PageType[] = [
   "SYST LINK",
   "MEMO UPDT",
   "REPO SNAP",
+  "TASK EXPO",
+  "TASK RESP",
 ];
 
 const CREATABLE_ENTRY_TYPES: PageType[] = [
@@ -32,6 +34,8 @@ const CREATABLE_ENTRY_TYPES: PageType[] = [
   "CHAT EXPO",
   "CHAT CMNT",
   "REPO SNAP",
+  "TASK EXPO",
+  "TASK RESP",
 ];
 
 
@@ -121,9 +125,29 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true });
     }
 
+    if (pageType === "TASK EXPO") {
+      await exportAndCreate(projectId, "TASK EXPO", entryId);
+      return Response.json({ ok: true });
+    }
+
     if (pageType === "MEMO EXPO") {
       await exportAndCreate(projectId, true, entryId);
       return Response.json({ ok: true });
+    }
+
+    if (pageType === "TASK RESP") {
+      if (entryId) {
+        await updateExistingEntryProperties({
+          entryId,
+          projectId,
+          pageType: "TASK RESP",
+          pageObj,
+        });
+        return Response.json({ ok: true });
+      } else {
+        const result = await createEntry({ thoughtId: projectId, pageType: "TASK RESP" });
+        return Response.json({ ok: true, ...result });
+      }
     }
 
     if (pageType === "SYST LINK") {

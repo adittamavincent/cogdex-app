@@ -7,7 +7,9 @@ export type PageType =
   | "CHAT CMNT"
   | "SYST LINK"
   | "MEMO UPDT"
-  | "REPO SNAP";
+  | "REPO SNAP"
+  | "TASK EXPO"
+  | "TASK RESP";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button
