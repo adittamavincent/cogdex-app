@@ -600,6 +600,123 @@ export function normalizeText(text: string): string {
     .replace(/\s+/g, " ");      // collapse spaces
 }
 
+// ── Structural Block Parser ─────────────────────────────────────────────────
+// Parses markdown into structural blocks where tables and code blocks are
+// atomic units. This prevents line-based diffing from fragmenting tables
+// and code blocks across block boundaries.
+
+interface StructuralBlock {
+  kind: "heading" | "paragraph" | "table" | "code" | "divider" | "blank";
+  content: string;       // raw markdown content (full table, full code block, etc.)
+  startLine: number;     // 0-indexed start line in the original markdown
+  endLine: number;       // 0-indexed exclusive end line
+  headingLevel?: number; // 1-6 for heading blocks
+}
+
+/**
+ * Parse markdown into structural blocks. Tables and code blocks are treated
+ * as atomic units — all their lines belong to a single block.
+ */
+function parseStructuralBlocks(markdown: string): StructuralBlock[] {
+  const lines = markdown.split(/\r?\n/);
+  const blocks: StructuralBlock[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Blank line
+    if (trimmed === "") {
+      blocks.push({ kind: "blank", content: "", startLine: i, endLine: i + 1 });
+      i++;
+      continue;
+    }
+
+    // Code block (fenced)
+    const codeStartMatch = trimmed.match(/^(`{3,})(.*)$/);
+    if (codeStartMatch) {
+      const fence = codeStartMatch[1];
+      const fenceLen = fence.length;
+      const startLine = i;
+      i++; // skip opening fence
+      while (i < lines.length) {
+        const closeMatch = lines[i].trim().match(/^(`{3,})/);
+        if (closeMatch && closeMatch[1].length >= fenceLen) {
+          i++; // skip closing fence
+          break;
+        }
+        i++;
+      }
+      blocks.push({
+        kind: "code",
+        content: lines.slice(startLine, i).join("\n"),
+        startLine,
+        endLine: i,
+      });
+      continue;
+    }
+
+    // Table (line starting and ending with |)
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      const startLine = i;
+      while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+        i++;
+      }
+      blocks.push({
+        kind: "table",
+        content: lines.slice(startLine, i).join("\n"),
+        startLine,
+        endLine: i,
+      });
+      continue;
+    }
+
+    // Heading
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      blocks.push({
+        kind: "heading",
+        content: line,
+        startLine: i,
+        endLine: i + 1,
+        headingLevel: headingMatch[1].length,
+      });
+      i++;
+      continue;
+    }
+
+    // Divider
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push({ kind: "divider", content: line, startLine: i, endLine: i + 1 });
+      i++;
+      continue;
+    }
+
+    // Regular paragraph / list / quote / etc.
+    blocks.push({ kind: "paragraph", content: line, startLine: i, endLine: i + 1 });
+    i++;
+  }
+
+  return blocks;
+}
+
+/**
+ * Convert structural blocks back to text lines with type annotations.
+ * Tables and code blocks emit their full content as a single logical unit
+ * (but still as individual lines for the output format).
+ */
+function buildBlockLines(blocks: StructuralBlock[]): Array<{ text: string, type: "normal" | "added" }> {
+  const result: Array<{ text: string, type: "normal" | "added" }> = [];
+  for (const block of blocks) {
+    const blockLines = block.content.split(/\r?\n/);
+    for (const line of blockLines) {
+      result.push({ text: line, type: "normal" });
+    }
+  }
+  return result;
+}
+
 function superNormalize(str: string): string {
   return str.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -716,7 +833,8 @@ export function matchLinesRelaxed(
 
 export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
   const hunks = parseDiff(patchText);
-  const baseLines: Array<{ text: string, type: "normal" | "added" }> = baseText.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }));
+  let workingText = baseText;
+  const baseLines: Array<{ text: string, type: "normal" | "added" }> = workingText.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }));
   if (hunks.length === 0) {
     return baseLines;
   }
@@ -745,6 +863,105 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
       }
     }
 
+    // ── Table-aware matching ─────────────────────────────────────────────
+    // When diff context lines include table rows (| cell | cell |), the
+    // line-based matcher can fail because table structure may shift. Detect
+    // table-heavy hunks and replace entire table blocks atomically.
+    const contextLines = hunk.lines.filter(l => l.startsWith(" "));
+    const tableContextLines = contextLines.filter(l => l.trim().startsWith("|") && l.trim().endsWith("|"));
+    const isTableHunk = contextLines.length > 0 &&
+      tableContextLines.length >= 2 &&
+      tableContextLines.length / contextLines.length > 0.3;
+
+    if (isTableHunk) {
+      const blocks = parseStructuralBlocks(workingText);
+      const tableBlocks = blocks.filter(b => b.kind === "table");
+
+      // Extract cell content from context lines for matching
+      const ctxCells = tableContextLines.map(l => {
+        const content = l.trim();
+        return content.split("|").slice(1, -1).map(c => normalizeText(c.trim()));
+      });
+
+      // Find matching table block
+      let matchedTable: StructuralBlock | null = null;
+      for (const tb of tableBlocks) {
+        const tbLines = tb.content.split("\n");
+        const tbCellLines = tbLines.filter(l => {
+          const t = l.trim();
+          return t.startsWith("|") && t.endsWith("|") &&
+            !/^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(t);
+        });
+        const tbCellContents = tbCellLines.map(l =>
+          l.trim().split("|").slice(1, -1).map(c => normalizeText(c.trim()))
+        );
+
+        let matchCount = 0;
+        for (const ctxRow of ctxCells) {
+          for (const tbRow of tbCellContents) {
+            if (ctxRow.length === tbRow.length && ctxRow.every((c, i) => c === tbRow[i])) {
+              matchCount++;
+              break;
+            }
+          }
+        }
+        if (matchCount >= Math.ceil(ctxCells.length * 0.5)) {
+          matchedTable = tb;
+          break;
+        }
+      }
+
+      if (matchedTable) {
+        // Replace entire table: keep context rows before, apply changes, keep context rows after
+        const baseLinesArr = workingText.split("\n");
+        const beforeLines = baseLinesArr.slice(0, matchedTable.startLine);
+        const afterLines = baseLinesArr.slice(matchedTable.endLine);
+
+        // Build new table from diff: context lines before removals, added lines, context after
+        const contextBefore: string[] = [];
+        const removed: string[] = [];
+        const added: string[] = [];
+        const contextAfter: string[] = [];
+        let phase: "before" | "remove" | "add" | "after" = "before";
+
+        for (const line of hunk.lines) {
+          const content = line.startsWith(" ") ? line.slice(1) : line.startsWith("-") || line.startsWith("+") ? line.slice(1) : line;
+          const isTableLine = content.trim().startsWith("|") && content.trim().endsWith("|");
+
+          if (line.startsWith("-")) {
+            phase = "remove";
+            removed.push(content);
+          } else if (line.startsWith("+")) {
+            phase = "add";
+            added.push(content);
+          } else if (line.startsWith(" ") || (!line.startsWith("@") && !line.startsWith("\\") && !line.startsWith("diff") && !line.startsWith("---") && !line.startsWith("+++"))) {
+            if (phase === "remove" || phase === "add") {
+              phase = "after";
+            }
+            if (phase === "before" && isTableLine) contextBefore.push(content);
+            else if (phase === "after" && isTableLine) contextAfter.push(content);
+            else if (!isTableLine) {
+              if (phase === "before") contextBefore.push(content);
+              else contextAfter.push(content);
+            }
+          }
+        }
+
+        const newTableLines = [...contextBefore, ...added, ...contextAfter];
+        const newTableContent = newTableLines.join("\n");
+        const newTableLinesArr = newTableContent.split("\n").filter(l => l.trim());
+
+        const result = [...beforeLines, ...newTableLinesArr, ...afterLines];
+        // Update workingText for subsequent hunks (line numbers shift)
+        workingText = result.join("\n");
+        baseLines.length = 0;
+        baseLines.push(...result.map(t => ({ text: t, type: "normal" as const })));
+        continue;
+      }
+      // No matching table found — fall through to line-level matching
+    }
+
+    // ── Standard line-level matching ─────────────────────────────────────
     const hintIndex = Math.max(0, hunk.oldStart - 1);
     let foundIndex = -1;
     let matchedLength = 0;
@@ -797,7 +1014,6 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
             if (matchResult) {
               foundIndex = idxForward;
               matchedLength = matchResult.matchedLength;
-              // Adjust mapping back to full searchLines space
               foundMapping = new Array(searchLines.length).fill(-1);
               foundMappingCounts = new Array(searchLines.length).fill(0);
               for (let i = 0; i < matchResult.mapping.length; i++) {
@@ -828,10 +1044,6 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
     // Fallback: Flattened Relaxed Matching
     if (foundIndex === -1) {
-      const superNormalize = (str: string) =>
-        str.toLowerCase()
-           .replace(/[^a-z0-9]/g, "");
-
       const searchFlat = superNormalize(searchLines.join(""));
 
       if (searchFlat.length > 10) {
@@ -855,7 +1067,6 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
     if (foundIndex !== -1) {
       if (foundMapping) {
-        // Robust mapping-based patching
         const newLines: { text: string, type: "normal" | "added" }[] = [];
         let b = foundIndex;
 
@@ -875,25 +1086,16 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
                   newLines.push(baseLines[b + i]);
                 }
               }
-              // If removed, we don't push baseLines[b..b+count-1]
               b += count;
-            } else {
-              // Not mapped (blank or structurally-skipped search line).
-              // Do NOT emit op.text here — the base lines (blanks, fences, dividers
-              // that were skipped during matching) will be re-emitted naturally by
-              // the `while (b < mappedB)` loop of the next mapped op.
-              // Emitting from op.text here would cause double-blank artifacts.
             }
           }
         }
-        // Push any remaining skipped lines within the matched block
         while (b < foundIndex + matchedLength) {
           newLines.push(baseLines[b]);
           b++;
         }
         baseLines.splice(foundIndex, matchedLength, ...newLines);
       } else {
-        // Fallback flattened patching uses replaceLines block replacement
         const replaceLines: { text: string, type: "normal" | "added" }[] = [];
         for (const op of ops) {
           if (op.type === "added" || op.type === "normal") {
@@ -903,7 +1105,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         baseLines.splice(foundIndex, matchedLength, ...replaceLines);
       }
     } else {
-      if (baseText.trim() === "") {
+      if (workingText.trim() === "") {
         const replaceLines: { text: string, type: "normal" | "added" }[] = [];
         for (const op of ops) {
           if (op.type === "added" || op.type === "normal") {
