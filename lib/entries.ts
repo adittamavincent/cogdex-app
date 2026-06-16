@@ -2192,14 +2192,33 @@ export async function updatePageBlocks(
   if (forceWipe || hasTableStructuralChange || (isCompletelyDifferent && oldSerialized.length > 0)) {
     debug(`Wiping and replacing blocks. similarity=${similarityRatio.toFixed(2)}, forceWipe=${forceWipe}, tableStructuralChange=${hasTableStructuralChange}`);
     
-    const topLevelBlocksToDelete = keepFirstBlock ? nestedBlocks.slice(1) : nestedBlocks;
-    
-    const CHUNK = 50;
-    for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
-      const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
-      await Promise.all(
-        chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
-      );
+    let manualWipeNeeded = true;
+    if (!keepFirstBlock) {
+      try {
+        await notion.request({
+          path: `pages/${pageId}`,
+          method: "patch",
+          body: {
+            erase_content: true
+          }
+        });
+        manualWipeNeeded = false;
+        debug(`Successfully erased content using Notion erase_content API for page ${pageId}`);
+      } catch (err) {
+        warn(`Failed to use erase_content on page ${pageId}, falling back to manual deletion:`, err);
+      }
+    }
+
+    if (manualWipeNeeded) {
+      const topLevelBlocksToDelete = keepFirstBlock ? nestedBlocks.slice(1) : nestedBlocks;
+      
+      const CHUNK = 50;
+      for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
+        const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
+        await Promise.all(
+          chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
+        );
+      }
     }
 
     for (let i = 0; i < newBlocks.length; i += 50) {
