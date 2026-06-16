@@ -398,12 +398,17 @@ async function getMemorandumContent(thoughtId: string, latestMemorandumPage: Not
   let currentContent = "";
   let latestTitle = "Memorandum";
 
-  for (const entry of memorandumEntries) {
+  const entryContents = await Promise.all(
+    memorandumEntries.map((entry) => readPageContent(entry.id))
+  );
+
+  for (let i = 0; i < memorandumEntries.length; i++) {
+    const entry = memorandumEntries[i];
     const name = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     if (name) latestTitle = name;
 
     const type = entry.properties?.Type?.select?.name;
-    const content = await readPageContent(entry.id);
+    const content = entryContents[i];
 
     if (type === "MEMO EXPO") {
       const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);

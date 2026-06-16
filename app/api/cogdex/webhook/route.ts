@@ -97,9 +97,10 @@ export async function POST(req: NextRequest) {
   // Retrieve the triggering page to determine if it is an Entry page or a Project page
   const pageObj = await notion.pages.retrieve({ page_id: rawId }) as any;
   const parentId = pageObj?.parent?.database_id || pageObj?.parent?.data_source_id;
+  const parentIdResolved = parentId ? await resolveDataSourceId(parentId) : undefined;
   const entryDbIdResolved = await resolveDataSourceId(process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!);
 
-  if (parentId === entryDbIdResolved) {
+  if (parentIdResolved === entryDbIdResolved) {
     entryId = rawId;
     const projectProp = findProperty(pageObj.properties || {}, "Project");
     projectId = projectProp?.relation?.[0]?.id;
