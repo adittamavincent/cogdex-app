@@ -72,6 +72,32 @@ export function findProperty(properties: Record<string, any>, name: string): any
   return matchedKey ? properties[matchedKey] : null;
 }
 
+async function getNextEntryNumber(projectId: string, excludeEntryId?: string): Promise<number> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: { property: "Project", relation: { contains: projectId } },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 30,
+  });
+
+  for (const entry of response.results) {
+    if (excludeEntryId && entry.id === excludeEntryId) {
+      continue;
+    }
+    const nameProp = findProperty((entry as any).properties || {}, "Name");
+    const title = nameProp?.title?.[0]?.plain_text?.trim() ?? "";
+    if (/^\d+$/.test(title)) {
+      const num = parseInt(title, 10);
+      if (!isNaN(num)) {
+        return num + 1;
+      }
+    }
+  }
+
+  return 1;
+}
+
 export async function createEntry(params: {
   thoughtId: string;
   pageType: PageType;
@@ -83,24 +109,7 @@ export async function createEntry(params: {
 
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
-  const recentResponse = await notion.dataSources.query({
-    data_source_id: entryDbId,
-    filter: { property: "Project", relation: { contains: thoughtId } },
-    sorts: [{ timestamp: "created_time", direction: "descending" }],
-    page_size: 1,
-  });
-
-  let nextNumber = 1;
-  if (recentResponse.results.length > 0) {
-    const latestEntry = recentResponse.results[0];
-    const nameProp = findProperty((latestEntry as any).properties || {}, "Name");
-    const latestTitle = nameProp?.title?.[0]?.plain_text ?? "";
-    const match = latestTitle.match(/\d+/);
-    const latestNum = match ? parseInt(match[0], 10) : NaN;
-    if (!isNaN(latestNum)) {
-      nextNumber = latestNum + 1;
-    }
-  }
+  const nextNumber = await getNextEntryNumber(thoughtId);
 
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: String(nextNumber) } }] },
@@ -144,7 +153,9 @@ export async function updateExistingEntryProperties(params: {
   const { entryId, projectId, pageType } = params;
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
-  const resolvedPageObj = params.pageObj || (await notion.pages.retrieve({ page_id: entryId }));
+  const resolvedPageObj = (params.pageObj && params.pageObj.id === entryId)
+    ? params.pageObj
+    : (await notion.pages.retrieve({ page_id: entryId }));
   const currentNameProp = findProperty(resolvedPageObj.properties || {}, "Name");
   const currentName = currentNameProp?.title?.[0]?.plain_text ?? "";
 
@@ -154,25 +165,7 @@ export async function updateExistingEntryProperties(params: {
   };
 
   if (!/^\d+$/.test(currentName.trim())) {
-    const recentResponse = await notion.dataSources.query({
-      data_source_id: entryDbId,
-      filter: { property: "Project", relation: { contains: projectId } },
-      sorts: [{ timestamp: "created_time", direction: "descending" }],
-      page_size: 2,
-    });
-
-    let nextNumber = 1;
-    const otherEntries = recentResponse.results.filter((entry: any) => entry.id !== entryId);
-    if (otherEntries.length > 0) {
-      const latestEntry = otherEntries[0];
-      const nameProp = findProperty((latestEntry as any).properties || {}, "Name");
-      const latestTitle = nameProp?.title?.[0]?.plain_text ?? "";
-      const match = latestTitle.match(/\d+/);
-      const latestNum = match ? parseInt(match[0], 10) : NaN;
-      if (!isNaN(latestNum)) {
-        nextNumber = latestNum + 1;
-      }
-    }
+    const nextNumber = await getNextEntryNumber(projectId, entryId);
     properties.Name = { title: [{ text: { content: String(nextNumber) } }] };
   }
 
@@ -1306,16 +1299,9 @@ export async function handleUserComment(triggeredId: string) {
   try {
     let finalTitle = findProperty((targetEntry as any).properties || {}, "Name")?.title?.[0]?.plain_text ?? "";
 
-    if (!finalTitle) {
-      const nameProp = findProperty((sourceEntry as any).properties || {}, "Name");
-      const inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
-      const match = inheritedTitle.match(/\d+/);
-      const sourceNum = match ? parseInt(match[0], 10) : NaN;
-      if (!isNaN(sourceNum)) {
-        finalTitle = String(sourceNum + 1);
-      } else {
-        finalTitle = inheritedTitle;
-      }
+    if (!finalTitle || !/^\d+$/.test(finalTitle.trim())) {
+      const nextNumber = await getNextEntryNumber(projectId, targetEntry.id);
+      finalTitle = String(nextNumber);
     }
 
     const propertiesToUpdate: any = {
