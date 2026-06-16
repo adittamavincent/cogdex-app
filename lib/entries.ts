@@ -1109,6 +1109,20 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
       continue;
     }
 
+    const todoMatch = line.text.match(/^\s*[-*+]\s+\[([ xX])\](?:\s+(.*))?$/);
+    if (todoMatch) {
+      const checked = todoMatch[1].toLowerCase() === "x";
+      blocks.push({
+        object: "block",
+        type: "to_do",
+        to_do: {
+          rich_text: splitTextIntoRichText(todoMatch[2] || "", line.type === "added"),
+          checked,
+        },
+      });
+      continue;
+    }
+
     const bulletMatch = line.text.match(/^\s*[-*+]\s+(.*)$/);
     if (bulletMatch) {
       blocks.push({
