@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks } from "@/lib/entries";
+import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -69,59 +69,81 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const thoughtId = payload?.data?.id;
-  if (!thoughtId) {
-    logError("Could not extract thoughtId from payload:", payload);
+  const rawId = payload?.data?.id;
+  if (!rawId) {
+    logError("Could not extract ID from payload:", payload);
     return Response.json(
       { error: "Could not extract page ID from Notion payload (expected data.id)" },
       { status: 400 }
     );
   }
 
+  let entryId: string | undefined = undefined;
+  let projectId = rawId;
+
+  // Retrieve the triggering page to determine if it is an Entry page or a Project page
+  const pageObj = await notion.pages.retrieve({ page_id: rawId }) as any;
+  const parentId = pageObj?.parent?.database_id || pageObj?.parent?.data_source_id;
+  const entryDbIdResolved = await resolveDataSourceId(process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!);
+
+  if (parentId === entryDbIdResolved) {
+    entryId = rawId;
+    const projectProp = findProperty(pageObj.properties || {}, "Project");
+    projectId = projectProp?.relation?.[0]?.id;
+    if (!projectId) {
+      return Response.json(
+        { error: `Entry page ${entryId} is not linked to any Project.` },
+        { status: 400 }
+      );
+    }
+  }
+
   // --- Route to action ---
   try {
     if (pageType === "CHAT EXPO") {
-      await exportAndCreate(thoughtId, false);
+      await exportAndCreate(projectId, false, entryId);
       return Response.json({ ok: true });
     }
 
     if (pageType === "MEMO EXPO") {
-      await exportAndCreate(thoughtId, true);
+      await exportAndCreate(projectId, true, entryId);
       return Response.json({ ok: true });
     }
 
     if (pageType === "SYST LINK") {
-      await relinkDatabases(thoughtId);
+      await relinkDatabases(projectId);
       return Response.json({ ok: true });
     }
 
     if (pageType === "MEMO RESP") {
-      const pageObj = await notion.pages.retrieve({ page_id: thoughtId }) as any;
-      const parentId = pageObj?.parent?.database_id || pageObj?.parent?.data_source_id;
-      const entryDbIdResolved = await resolveDataSourceId(process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!);
-
-      if (parentId === entryDbIdResolved) {
-        await handleCanvasUpdate(thoughtId);
+      if (entryId) {
+        await updateExistingEntryProperties({
+          entryId,
+          projectId,
+          pageType: "MEMO RESP",
+          pageObj,
+        });
+        await handleCanvasUpdate(entryId);
         return Response.json({ ok: true });
       } else {
-        const result = await createEntry({ thoughtId, pageType: "MEMO RESP" });
+        const result = await createEntry({ thoughtId: projectId, pageType: "MEMO RESP" });
         return Response.json({ ok: true, ...result });
       }
     }
 
     if (pageType === "MEMO UPDT") {
-      await handleCNVUPD(thoughtId);
+      await handleCNVUPD(projectId);
       return Response.json({ ok: true });
     }
 
     if (pageType === "CHAT CMNT") {
-      await handleUserComment(thoughtId);
+      await handleUserComment(entryId || projectId);
       return Response.json({ ok: true });
     }
 
     if (pageType === "REPO SNAP") {
-      const pageObj = await notion.pages.retrieve({ page_id: thoughtId }) as any;
-      const canvasRelations = pageObj.properties?.Canvas?.relation || [];
+      const projectPage = await notion.pages.retrieve({ page_id: projectId }) as any;
+      const canvasRelations = projectPage.properties?.Canvas?.relation || [];
       if (canvasRelations.length === 0) {
         return Response.json({ error: "No Canvas entry linked to this project" }, { status: 400 });
       }
@@ -182,16 +204,28 @@ export async function POST(req: NextRequest) {
         throw err;
       }
 
-      const { pageId } = await createEntry({ thoughtId, pageType: "REPO SNAP" });
-      if (pageId) {
-        await setExclusiveInclude(thoughtId, "REPO SNAP", pageId);
+      let activeEntryId = entryId;
+      if (activeEntryId) {
+        await updateExistingEntryProperties({
+          entryId: activeEntryId,
+          projectId,
+          pageType: "REPO SNAP",
+          pageObj,
+        });
+      } else {
+        const { pageId } = await createEntry({ thoughtId: projectId, pageType: "REPO SNAP" });
+        activeEntryId = pageId;
+      }
+
+      if (activeEntryId) {
+        await setExclusiveInclude(projectId, "REPO SNAP", activeEntryId);
 
         // write output in chunks
         const blocks = markdownToRichNotionBlocks(repomixOutput);
         const CHUNK = 100;
         for (let i = 0; i < blocks.length; i += CHUNK) {
           await notion.blocks.children.append({
-            block_id: pageId,
+            block_id: activeEntryId,
             children: blocks.slice(i, i + CHUNK) as any,
           });
         }
@@ -200,8 +234,18 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true });
     }
 
-    const result = await createEntry({ thoughtId, pageType });
-    return Response.json({ ok: true, ...result });
+    if (entryId) {
+      await updateExistingEntryProperties({
+        entryId,
+        projectId,
+        pageType,
+        pageObj,
+      });
+      return Response.json({ ok: true });
+    } else {
+      const result = await createEntry({ thoughtId: projectId, pageType });
+      return Response.json({ ok: true, ...result });
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
     logError("Webhook error:", err);

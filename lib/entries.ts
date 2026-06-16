@@ -64,7 +64,7 @@ const TEMPLATES: Record<PageType, string> = {
   "REPO SNAP": "",
 };
 
-function findProperty(properties: Record<string, any>, name: string): any {
+export function findProperty(properties: Record<string, any>, name: string): any {
   const targetKey = name.toLowerCase().replace(/\s+/g, "");
   const matchedKey = Object.keys(properties).find(
     (k) => k.toLowerCase().replace(/\s+/g, "") === targetKey
@@ -131,6 +131,67 @@ export async function createEntry(params: {
 
   const page = await notion.pages.create(createPayload);
   return { pageId: page.id, ignored: false };
+}
+
+export async function updateExistingEntryProperties(params: {
+  entryId: string;
+  projectId: string;
+  pageType: PageType;
+  entriesReferencedIds?: string[];
+  systemPromptsUsedIds?: string[];
+  pageObj?: any;
+}): Promise<void> {
+  const { entryId, projectId, pageType } = params;
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+
+  const resolvedPageObj = params.pageObj || (await notion.pages.retrieve({ page_id: entryId }));
+  const currentNameProp = findProperty(resolvedPageObj.properties || {}, "Name");
+  const currentName = currentNameProp?.title?.[0]?.plain_text ?? "";
+
+  const properties: Record<string, unknown> = {
+    Type: { select: { name: pageType } },
+    Include: { checkbox: pageType !== "CHAT EXPO" && pageType !== "MEMO EXPO" && pageType !== "MEMO RESP" && pageType !== "REPO SNAP" },
+  };
+
+  if (!/^\d+$/.test(currentName.trim())) {
+    const recentResponse = await notion.dataSources.query({
+      data_source_id: entryDbId,
+      filter: { property: "Project", relation: { contains: projectId } },
+      sorts: [{ timestamp: "created_time", direction: "descending" }],
+      page_size: 2,
+    });
+
+    let nextNumber = 1;
+    const otherEntries = recentResponse.results.filter((entry: any) => entry.id !== entryId);
+    if (otherEntries.length > 0) {
+      const latestEntry = otherEntries[0];
+      const nameProp = findProperty((latestEntry as any).properties || {}, "Name");
+      const latestTitle = nameProp?.title?.[0]?.plain_text ?? "";
+      const match = latestTitle.match(/\d+/);
+      const latestNum = match ? parseInt(match[0], 10) : NaN;
+      if (!isNaN(latestNum)) {
+        nextNumber = latestNum + 1;
+      }
+    }
+    properties.Name = { title: [{ text: { content: String(nextNumber) } }] };
+  }
+
+  if (params.entriesReferencedIds && params.entriesReferencedIds.length > 0) {
+    properties["Entries Referenced"] = {
+      relation: params.entriesReferencedIds.map((id) => ({ id })),
+    };
+  }
+
+  if (params.systemPromptsUsedIds && params.systemPromptsUsedIds.length > 0) {
+    properties["System Prompt Used"] = {
+      relation: params.systemPromptsUsedIds.map((id) => ({ id })),
+    };
+  }
+
+  await notion.pages.update({
+    page_id: entryId,
+    properties: properties as any,
+  });
 }
 
 // Minimal markdown-to-Notion-blocks converter for templates.

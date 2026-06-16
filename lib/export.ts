@@ -1,5 +1,5 @@
 import { notion } from "./notion";
-import { createEntry, resolveDataSourceId, unwrapCodeFences, isDiff, applyPatch } from "./entries";
+import { createEntry, resolveDataSourceId, unwrapCodeFences, isDiff, applyPatch, updateExistingEntryProperties } from "./entries";
 import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
@@ -475,29 +475,47 @@ function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
   return blocks;
 }
 
-export async function exportAndCreate(thoughtId: string, isCanvasExport: boolean = false): Promise<void> {
+export async function exportAndCreate(
+  thoughtId: string,
+  isCanvasExport: boolean = false,
+  existingEntryId?: string
+): Promise<void> {
   const { xml, entryIds, promptIds } = await buildXML(thoughtId, isCanvasExport);
 
   // Prepend <canvas> if needed
   const finalXml = isCanvasExport ? `<canvas>\n\n${xml}` : xml;
 
-  // Create the Export entry page
-  const { pageId } = await createEntry({
-    thoughtId,
-    pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
-    entriesReferencedIds: entryIds,
-    systemPromptsUsedIds: promptIds,
-  });
-
-  // Write XML as paragraph blocks to the new page.
-  // Notion has a 100-blocks-per-append limit — chunk to stay within it.
-  const blocks = xmlToNotionBlocks(finalXml);
-  const CHUNK = 100;
-  for (let i = 0; i < blocks.length; i += CHUNK) {
-    // SDK v5: blocks.children.append is unchanged
-    await notion.blocks.children.append({
-      block_id: pageId!,
-      children: blocks.slice(i, i + CHUNK) as BlockObjectRequest[],
+  let pageId = existingEntryId;
+  if (pageId) {
+    await updateExistingEntryProperties({
+      entryId: pageId,
+      projectId: thoughtId,
+      pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
+      entriesReferencedIds: entryIds,
+      systemPromptsUsedIds: promptIds,
     });
+  } else {
+    // Create the Export entry page
+    const res = await createEntry({
+      thoughtId,
+      pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
+      entriesReferencedIds: entryIds,
+      systemPromptsUsedIds: promptIds,
+    });
+    pageId = res.pageId;
+  }
+
+  if (pageId) {
+    // Write XML as paragraph blocks to the new page.
+    // Notion has a 100-blocks-per-append limit — chunk to stay within it.
+    const blocks = xmlToNotionBlocks(finalXml);
+    const CHUNK = 100;
+    for (let i = 0; i < blocks.length; i += CHUNK) {
+      // SDK v5: blocks.children.append is unchanged
+      await notion.blocks.children.append({
+        block_id: pageId,
+        children: blocks.slice(i, i + CHUNK) as BlockObjectRequest[],
+      });
+    }
   }
 }
