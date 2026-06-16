@@ -339,10 +339,20 @@ export function unwrapCodeFences(text: string): string {
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
     trimmed = trimmed.slice(1, -1).trim();
   }
-  const match = trimmed.match(/`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}/);
-  if (match) {
-    return match[1];
+
+  // 1. If the entire string is a code fence, unwrap it.
+  const exactMatch = trimmed.match(/^`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}$/);
+  if (exactMatch) {
+    return exactMatch[1];
   }
+
+  // 2. If there is conversational text but it contains a diff inside a code block, extract the diff.
+  const partialMatch = trimmed.match(/`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}/);
+  if (partialMatch && isDiff(partialMatch[1])) {
+    return partialMatch[1];
+  }
+
+  // 3. Otherwise, return the original text (preserves full documents containing code blocks).
   return trimmed;
 }
 
