@@ -180,7 +180,13 @@ export async function POST(req: NextRequest) {
       const repoUrl = repoUrlProp?.rich_text?.[0]?.plain_text;
       
       if (!repoUrl) {
-        return Response.json({ error: "No Repo URL set on Canvas entry for this project" }, { status: 400 });
+        const canvasTitle = canvasPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
+        return Response.json(
+          {
+            error: `No Repo URL set on Canvas page "${canvasTitle}". Go to ${canvasPage.url} and fill in the "Repo URL" property.`,
+          },
+          { status: 400 }
+        );
       }
 
       // Repomix packing with timeout
