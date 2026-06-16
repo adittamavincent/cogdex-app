@@ -321,7 +321,9 @@ async function getMemorandumContent(thoughtId: string, latestMemorandumPage: Not
 
     if (type === "MEMO EXPO") {
       const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
-      currentContent = match ? match[1].trim() : "";
+      if (match) {
+        currentContent = match[1].trim();
+      }
     } else {
       const unwrapped = unwrapCodeFences(content);
       if (isDiff(unwrapped)) {

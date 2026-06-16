@@ -703,6 +703,33 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
       }
     }
 
+    // Fallback: Flattened Relaxed Matching
+    if (foundIndex === -1) {
+      const superNormalize = (str: string) =>
+        str.toLowerCase()
+           .replace(/[^a-z0-9]/g, "");
+
+      const searchFlat = superNormalize(searchLines.join(""));
+
+      if (searchFlat.length > 10) {
+        for (let start = 0; start < baseLines.length; start++) {
+          let currentFlat = "";
+          let end = start;
+
+          while (end < baseLines.length && currentFlat.length < searchFlat.length) {
+            currentFlat += superNormalize(baseLines[end].text);
+            end++;
+          }
+
+          if (currentFlat === searchFlat) {
+            foundIndex = start;
+            matchedLength = end - start;
+            break;
+          }
+        }
+      }
+    }
+
     if (foundIndex !== -1) {
       baseLines.splice(foundIndex, matchedLength, ...replaceLines);
     } else {
@@ -1443,7 +1470,9 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
 
     if (type === "MEMO EXPO") {
       const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
-      currentContent = match ? match[1].trim() : "";
+      if (match) {
+        currentContent = match[1].trim();
+      }
     } else {
       const unwrapped = unwrapCodeFences(content);
       if (isDiff(unwrapped)) {
