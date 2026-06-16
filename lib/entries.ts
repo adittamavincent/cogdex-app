@@ -194,6 +194,33 @@ export async function updateExistingEntryProperties(params: {
   });
 }
 
+export async function findRecentEmptyEntry(projectId: string, pageType: PageType): Promise<string | undefined> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: projectId } },
+        { property: "Type", select: { equals: pageType } }
+      ]
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 1
+  });
+
+  if (response.results.length === 0) return undefined;
+
+  const latestEntry = response.results[0] as any;
+  const nameProp = findProperty(latestEntry.properties || {}, "Name");
+  const latestName = nameProp?.title?.[0]?.plain_text ?? "";
+
+  if (!/^\d+$/.test(latestName.trim())) {
+    return latestEntry.id;
+  }
+
+  return undefined;
+}
+
 // Minimal markdown-to-Notion-blocks converter for templates.
 // Only handles headings (##) and paragraphs — intentionally minimal.
 function markdownToNotionBlocks(md: string): Record<string, unknown>[] {
