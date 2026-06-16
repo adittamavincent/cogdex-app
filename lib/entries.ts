@@ -573,7 +573,7 @@ export function parseDiff(diffText: string): Hunk[] {
 
 // Code fence lines — must be handled transparently when LLMs omit them from diff context.
 // They are skipped when matching prose lines and re-emitted in the output unchanged.
-function isCodeFenceLine(trimmed: string): boolean {
+export function isCodeFenceLine(trimmed: string): boolean {
   return /^`{3,}/.test(trimmed);
 }
 
@@ -589,7 +589,7 @@ function isExactMatchStructural(trimmed: string): boolean {
   return false;
 }
 
-function normalizeText(text: string): string {
+export function normalizeText(text: string): string {
   return text
     .trim()
     .toLowerCase()
@@ -600,14 +600,19 @@ function normalizeText(text: string): string {
     .replace(/\s+/g, " ");      // collapse spaces
 }
 
-function matchLinesRelaxed(
+function superNormalize(str: string): string {
+  return str.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function matchLinesRelaxed(
   baseLines: Array<{ text: string, type: "normal" | "added" }>,
   baseIdx: number,
   searchLines: string[]
-): { matchedLength: number, mapping: number[] } | null {
+): { matchedLength: number, mapping: number[], mappingCounts: number[] } | null {
   let b = baseIdx;
   let s = 0;
   const mapping: number[] = new Array(searchLines.length).fill(-1);
+  const mappingCounts: number[] = new Array(searchLines.length).fill(0);
 
   while (s < searchLines.length) {
     const sLine = searchLines[s].trim();
@@ -632,6 +637,7 @@ function matchLinesRelaxed(
       const bLine = baseLines[b].text.trim();
       if (bLine !== sLine) return null;
       mapping[s] = b;
+      mappingCounts[s] = 1;
       b++;
       s++;
       continue;
@@ -639,11 +645,18 @@ function matchLinesRelaxed(
 
     // For normal prose lines: skip blank base lines, code fence lines, AND
     // horizontal divider lines (---) that LLMs frequently omit from diff context.
+    // Also skip heading lines (e.g. ## Repository) if they don't match the current search line.
     // These skipped base lines are preserved in the output via the reconstruction loop.
     while (b < baseLines.length) {
       const bTrimmed = baseLines[b].text.trim();
       if (bTrimmed === "" || isCodeFenceLine(bTrimmed) || /^(-{3,}|\*{3,}|_{3,})$/.test(bTrimmed)) {
         b++;
+      } else if (/^#{1,6}\s+/.test(bTrimmed)) {
+        if (normalizeText(bTrimmed) !== normalizeText(sLine)) {
+          b++;
+        } else {
+          break;
+        }
       } else {
         break;
       }
@@ -654,16 +667,51 @@ function matchLinesRelaxed(
     }
 
     const bLine = baseLines[b].text.trim();
-    if (normalizeText(bLine) !== normalizeText(sLine)) {
-      return null;
+    if (normalizeText(bLine) === normalizeText(sLine)) {
+      mapping[s] = b;
+      mappingCounts[s] = 1;
+      b++;
+      s++;
+      continue;
     }
 
-    mapping[s] = b;
-    b++;
-    s++;
+    // Try concatenation match for squashed lines (e.g. flattened tables)
+    const normS = superNormalize(sLine);
+    if (normS.length > 0) {
+      let tempB = b;
+      let concatenatedNorm = "";
+      let matchedCount = 0;
+      let found = false;
+
+      for (let count = 1; count <= 15; count++) {
+        if (tempB >= baseLines.length) break;
+        const bText = baseLines[tempB].text.trim();
+        concatenatedNorm += superNormalize(bText);
+        tempB++;
+
+        if (concatenatedNorm === normS) {
+          matchedCount = count;
+          found = true;
+          break;
+        }
+        if (concatenatedNorm.length > normS.length) {
+          break;
+        }
+      }
+
+      if (found && matchedCount > 0) {
+        mapping[s] = b;
+        mappingCounts[s] = matchedCount;
+        b += matchedCount;
+        s++;
+        continue;
+      }
+    }
+
+    return null;
   }
 
-  return { matchedLength: b - baseIdx, mapping };
+  return { matchedLength: b - baseIdx, mapping, mappingCounts };
 }
 
 export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
@@ -701,6 +749,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
     let foundIndex = -1;
     let matchedLength = 0;
     let foundMapping: number[] | null = null;
+    let foundMappingCounts: number[] | null = null;
     const maxOffset = Math.max(baseLines.length, 100);
 
     for (let offset = 0; offset < maxOffset; offset++) {
@@ -711,6 +760,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
           foundIndex = idxForward;
           matchedLength = matchResult.matchedLength;
           foundMapping = matchResult.mapping;
+          foundMappingCounts = matchResult.mappingCounts;
           break;
         }
       }
@@ -721,6 +771,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
           foundIndex = idxBackward;
           matchedLength = matchResult.matchedLength;
           foundMapping = matchResult.mapping;
+          foundMappingCounts = matchResult.mappingCounts;
           break;
         }
       }
@@ -748,8 +799,10 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
               matchedLength = matchResult.matchedLength;
               // Adjust mapping back to full searchLines space
               foundMapping = new Array(searchLines.length).fill(-1);
+              foundMappingCounts = new Array(searchLines.length).fill(0);
               for (let i = 0; i < matchResult.mapping.length; i++) {
                 foundMapping[startTrim + i] = matchResult.mapping[i];
+                foundMappingCounts[startTrim + i] = matchResult.mappingCounts[i];
               }
               break;
             }
@@ -761,8 +814,10 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
               foundIndex = idxBackward;
               matchedLength = matchResult.matchedLength;
               foundMapping = new Array(searchLines.length).fill(-1);
+              foundMappingCounts = new Array(searchLines.length).fill(0);
               for (let i = 0; i < matchResult.mapping.length; i++) {
                 foundMapping[startTrim + i] = matchResult.mapping[i];
+                foundMappingCounts[startTrim + i] = matchResult.mappingCounts[i];
               }
               break;
             }
@@ -814,16 +869,20 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
                 newLines.push(baseLines[b]);
                 b++;
               }
+              const count = (op.searchIdx !== undefined && foundMappingCounts) ? foundMappingCounts[op.searchIdx] : 1;
               if (op.type === "normal") {
-                newLines.push(baseLines[b]);
+                for (let i = 0; i < count; i++) {
+                  newLines.push(baseLines[b + i]);
+                }
               }
-              // If removed, we don't push baseLines[b]
-              b++;
+              // If removed, we don't push baseLines[b..b+count-1]
+              b += count;
             } else {
-              // Not mapped (e.g. empty line in searchLines)
-              if (op.type === "normal") {
-                newLines.push({ text: op.text, type: "normal" });
-              }
+              // Not mapped (blank or structurally-skipped search line).
+              // Do NOT emit op.text here — the base lines (blanks, fences, dividers
+              // that were skipped during matching) will be re-emitted naturally by
+              // the `while (b < mappedB)` loop of the next mapped op.
+              // Emitting from op.text here would cause double-blank artifacts.
             }
           }
         }
