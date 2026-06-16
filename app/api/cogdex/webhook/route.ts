@@ -34,6 +34,17 @@ const CREATABLE_ENTRY_TYPES: PageType[] = [
   "REPO SNAP",
 ];
 
+const DEPRECATED_PAGE_TYPE_MAP: Record<string, PageType> = {
+  "REG USR": "CHAT USER",
+  "REG RES": "CHAT RESP",
+  "REG EXP": "CHAT EXPO",
+  "REG USR CMT": "CHAT CMNT",
+  "CNV EXP": "MEMO EXPO",
+  "CNV RES": "MEMO RESP",
+  "CNV UPD": "MEMO UPDT",
+  "Relink Databases": "SYST LINK",
+};
+
 export async function POST(req: NextRequest) {
   // --- Auth ---
   const incomingSecret =
@@ -47,10 +58,12 @@ export async function POST(req: NextRequest) {
   }
 
   // --- Page type (from header — the only thing that differs per button) ---
-  const pageTypeHeader =
+  const rawPageTypeHeader =
     req.headers.get(PAGE_TYPE_HEADER) ||
     req.headers.get("cogdex-page-type") ||
     req.headers.get("x-cogdex-page-type");
+
+  const pageTypeHeader = (rawPageTypeHeader && DEPRECATED_PAGE_TYPE_MAP[rawPageTypeHeader]) || rawPageTypeHeader;
 
   if (!pageTypeHeader || !VALID_PAGE_TYPES.includes(pageTypeHeader as PageType)) {
     return Response.json(
