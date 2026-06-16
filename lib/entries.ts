@@ -94,7 +94,8 @@ export async function createEntry(params: {
     const latestEntry = recentResponse.results[0];
     const nameProp = findProperty((latestEntry as any).properties || {}, "Name");
     const latestTitle = nameProp?.title?.[0]?.plain_text ?? "";
-    const latestNum = parseInt(latestTitle, 10);
+    const match = latestTitle.match(/\d+/);
+    const latestNum = match ? parseInt(match[0], 10) : NaN;
     if (!isNaN(latestNum)) {
       nextNumber = latestNum + 1;
     }
@@ -1209,7 +1210,8 @@ export async function handleUserComment(triggeredId: string) {
     if (!finalTitle) {
       const nameProp = findProperty((sourceEntry as any).properties || {}, "Name");
       const inheritedTitle = nameProp?.title?.[0]?.plain_text ?? "";
-      const sourceNum = parseInt(inheritedTitle, 10);
+      const match = inheritedTitle.match(/\d+/);
+      const sourceNum = match ? parseInt(match[0], 10) : NaN;
       if (!isNaN(sourceNum)) {
         finalTitle = String(sourceNum + 1);
       } else {
@@ -1377,8 +1379,10 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
   canvasEntries.sort((a: any, b: any) => {
     const nameA = findProperty(a.properties || {}, "Name")?.title?.[0]?.plain_text || "";
     const nameB = findProperty(b.properties || {}, "Name")?.title?.[0]?.plain_text || "";
-    const numA = parseInt(nameA, 10);
-    const numB = parseInt(nameB, 10);
+    const matchA = nameA.match(/\d+/);
+    const matchB = nameB.match(/\d+/);
+    const numA = matchA ? parseInt(matchA[0], 10) : NaN;
+    const numB = matchB ? parseInt(matchB[0], 10) : NaN;
     if (!isNaN(numA) && !isNaN(numB)) {
       return numA - numB;
     }
