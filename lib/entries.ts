@@ -763,7 +763,7 @@ export function matchLinesRelaxed(
     // These skipped base lines are preserved in the output via the reconstruction loop.
     while (b < baseLines.length) {
       const bTrimmed = baseLines[b].text.trim();
-      if (bTrimmed === "" || isCodeFenceLine(bTrimmed) || /^(-{3,}|\*{3,}|_{3,})$/.test(bTrimmed)) {
+      if (bTrimmed === "" || isCodeFenceLine(bTrimmed) || /^(-{3,}|\*{3,}|_{3,})$/.test(bTrimmed) || /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(bTrimmed)) {
         b++;
       } else if (/^#{1,6}\s+/.test(bTrimmed)) {
         if (normalizeText(bTrimmed) !== normalizeText(sLine)) {
@@ -860,122 +860,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
       }
     }
 
-    // ── Table-aware matching ─────────────────────────────────────────────
-    // When diff context lines include table rows (| cell | cell |), the
-    // line-based matcher can fail because table structure may shift. Detect
-    // table-heavy hunks and replace entire table blocks atomically.
-    const contextLines = hunk.lines.filter(l => l.startsWith(" "));
-    const tableContextLines = contextLines.filter(l => l.trim().startsWith("|") && l.trim().endsWith("|"));
-    const isTableHunk = contextLines.length > 0 &&
-      tableContextLines.length >= 2 &&
-      tableContextLines.length / contextLines.length > 0.3;
-
-    if (isTableHunk) {
-      const blocks = parseStructuralBlocks(workingText);
-      const tableBlocks = blocks.filter(b => b.kind === "table");
-
-      // Extract cell content from context lines for matching
-      const ctxCells = tableContextLines.map(l => {
-        const content = l.trim();
-        return content.split("|").slice(1, -1).map(c => normalizeText(c.trim()));
-      });
-
-      // Find matching table block
-      let matchedTable: StructuralBlock | null = null;
-      let bestMatchScore = -1;
-      let closestDistance = Infinity;
-
-      for (const tb of tableBlocks) {
-        const tbLines = tb.content.split("\n");
-        const tbCellLines = tbLines.filter(l => {
-          const t = l.trim();
-          return t.startsWith("|") && t.endsWith("|") &&
-            !/^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(t);
-        });
-        const tbCellContents = tbCellLines.map(l =>
-          l.trim().split("|").slice(1, -1).map(c => normalizeText(c.trim()))
-        );
-
-        let matchCount = 0;
-        for (const ctxRow of ctxCells) {
-          for (const tbRow of tbCellContents) {
-            if (ctxRow.length === tbRow.length && ctxRow.every((c, i) => c === tbRow[i])) {
-              matchCount++;
-              break;
-            }
-          }
-        }
-        
-        const minRequiredMatch = Math.ceil(ctxCells.length * 0.5);
-        if (matchCount >= minRequiredMatch) {
-          const distance = Math.abs(tb.startLine - (hunk.oldStart - 1));
-          if (matchCount > bestMatchScore || (matchCount === bestMatchScore && distance < closestDistance)) {
-            bestMatchScore = matchCount;
-            closestDistance = distance;
-            matchedTable = tb;
-          }
-        }
-      }
-
-      if (matchedTable) {
-        // Replace entire table: keep context rows before, apply changes, keep context rows after
-        const baseLinesArr = workingText.split("\n");
-        const beforeLines = baseLinesArr.slice(0, matchedTable.startLine);
-        const afterLines = baseLinesArr.slice(matchedTable.endLine);
-
-        // Build new table from diff: context lines before removals, added lines, context after
-        const contextBefore: string[] = [];
-        const removed: string[] = [];
-        const added: string[] = [];
-        const contextAfter: string[] = [];
-        let phase: "before" | "remove" | "add" | "after" = "before";
-
-        for (const line of hunk.lines) {
-          const content = line.startsWith(" ") ? line.slice(1) : line.startsWith("-") || line.startsWith("+") ? line.slice(1) : line;
-          const isTableLine = content.trim().startsWith("|") && content.trim().endsWith("|");
-
-          if (line.startsWith("-")) {
-            phase = "remove";
-            removed.push(content);
-          } else if (line.startsWith("+")) {
-            phase = "add";
-            added.push(content);
-          } else if (line.startsWith(" ") || (!line.startsWith("@") && !line.startsWith("\\") && !line.startsWith("diff") && !line.startsWith("---") && !line.startsWith("+++"))) {
-            if (phase === "remove" || phase === "add") {
-              phase = "after";
-            }
-            if (phase === "before" && isTableLine) contextBefore.push(content);
-            else if (phase === "after" && isTableLine) contextAfter.push(content);
-            else if (!isTableLine) {
-              if (phase === "before") contextBefore.push(content);
-              else contextAfter.push(content);
-            }
-          }
-        }
-
-        const newTableLines = [...contextBefore, ...added, ...contextAfter];
-        const newTableContent = newTableLines.join("\n");
-        const newTableLinesArr = newTableContent.split("\n").filter(l => l.trim());
-
-        const result = [...beforeLines, ...newTableLinesArr, ...afterLines];
-        
-        // Adjust the coordinates of all remaining hunks whose target was shifted
-        const lineDelta = result.length - baseLinesArr.length;
-        const currentHunkIdx = sortedHunks.indexOf(hunk);
-        for (let idx = currentHunkIdx + 1; idx < sortedHunks.length; idx++) {
-          if (sortedHunks[idx].oldStart > matchedTable.startLine) {
-            sortedHunks[idx].oldStart += lineDelta;
-          }
-        }
-
-        // Update workingText for subsequent hunks (line numbers shift)
-        workingText = result.join("\n");
-        baseLines.length = 0;
-        baseLines.push(...result.map(t => ({ text: t, type: "normal" as const })));
-        continue;
-      }
-      // No matching table found — fall through to line-level matching
-    }
+    // Table-aware matching removed. Defer to line-level matching.
 
     // ── Standard line-level matching ─────────────────────────────────────
     const hintIndex = Math.max(0, hunk.oldStart - 1);
