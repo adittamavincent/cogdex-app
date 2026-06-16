@@ -591,9 +591,10 @@ function isExactMatchStructural(trimmed: string): boolean {
 
 export function normalizeText(text: string): string {
   return text
-    .trim()
     .toLowerCase()
-    .replace(/[*_~`]/g, "")    // remove bold, italic, strikethrough, inline code (keep headings, list bullets, table pipes)
+    .replace(/^[-*+]\s+/, "")   // remove list bullet indicators at the start
+    .replace(/[*_~`#]/g, "")    // remove markdown characters
+    .trim()
     .replace(/\s+/g, " ");      // collapse spaces
 }
 
@@ -2191,29 +2192,14 @@ export async function updatePageBlocks(
   if (forceWipe || hasTableStructuralChange || (isCompletelyDifferent && oldSerialized.length > 0)) {
     debug(`Wiping and replacing blocks. similarity=${similarityRatio.toFixed(2)}, forceWipe=${forceWipe}, tableStructuralChange=${hasTableStructuralChange}`);
     
-    let manualWipeNeeded = true;
-    if (!keepFirstBlock) {
-      try {
-        await (notion.pages.update as any)({
-          page_id: pageId,
-          erase_content: true
-        });
-        manualWipeNeeded = false;
-      } catch (err) {
-        warn(`Failed to use erase_content on page ${pageId}, falling back to manual deletion:`, err);
-      }
-    }
-
-    if (manualWipeNeeded) {
-      const topLevelBlocksToDelete = oldBlocksToSync.filter(b => b.parentBlockId === pageId);
-      
-      const CHUNK = 50;
-      for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
-        const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
-        await Promise.all(
-          chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
-        );
-      }
+    const topLevelBlocksToDelete = keepFirstBlock ? nestedBlocks.slice(1) : nestedBlocks;
+    
+    const CHUNK = 50;
+    for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
+      const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
+      await Promise.all(
+        chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
+      );
     }
 
     for (let i = 0; i < newBlocks.length; i += 50) {
