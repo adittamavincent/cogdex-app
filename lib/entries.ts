@@ -369,7 +369,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
         } else if (propNameLower === "system prompt used") {
           prop.width = 100;
         } else if (propNameLower === "include") {
-          prop.width = 1;
+          prop.width = 32;
         }
       } else if (fallbackDataSourceId === CANVAS_DB_ID) {
         if (propId === "title" || propNameLower === "name") {
@@ -381,7 +381,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
         if (propId === "title" || propNameLower === "name") {
           prop.width = 150;
         } else if (propNameLower === "include") {
-          prop.width = 1;
+          prop.width = 32;
         } else if (propNameLower === "priority") {
           prop.width = 100;
         } else if (propNameLower === "created time") {
