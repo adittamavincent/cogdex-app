@@ -317,11 +317,12 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     const name = originalView.name || "View";
     const type = originalView.type || "table";
     const sorts = originalView.sorts || undefined;
-    
     let configuration = originalView.configuration ? JSON.parse(JSON.stringify(originalView.configuration)) : undefined;
+    let dbProperties: any = {};
     try {
       debug(`Retrieving actual schema for data source ${dataSourceId} to sanitize property configurations`);
       const db = await notion.dataSources.retrieve({ data_source_id: dataSourceId }) as any;
+      dbProperties = db.properties || {};
       const validPropertyIds = new Set(
         Object.values(db.properties).flatMap((prop: any) => [
           prop.id,
@@ -354,6 +355,29 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
     if (!configuration.properties || !Array.isArray(configuration.properties)) {
       configuration.properties = [];
     }
+
+    if (fallbackDataSourceId === CANVAS_DB_ID) {
+      const repoUrlKey = Object.keys(dbProperties).find(
+        (key) => key.toLowerCase().trim() === "repo url"
+      );
+      if (repoUrlKey) {
+        const repoUrlId = dbProperties[repoUrlKey].id;
+        const repoUrlProp = configuration.properties.find(
+          (p: any) => p.property_id === repoUrlId || (p.property_name && p.property_name.toLowerCase().trim() === "repo url")
+        );
+        if (repoUrlProp) {
+          repoUrlProp.visible = true;
+        } else {
+          configuration.properties.push({
+            property_id: repoUrlId,
+            property_name: repoUrlKey,
+            visible: true,
+            width: 200
+          });
+        }
+      }
+    }
+
     let titleProp = configuration.properties.find((p: any) => p.property_id === "title");
     if (!titleProp) {
       titleProp = {
@@ -394,6 +418,8 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
           prop.width = 100;
         } else if (propNameLower === "project") {
           prop.visible = false;
+        } else if (propNameLower === "repo url") {
+          prop.visible = true;
         }
       } else if (fallbackDataSourceId === SYSTEM_PROMPT_DB_ID) {
         if (propId === "title" || propNameLower === "name") {
