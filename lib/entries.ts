@@ -330,23 +330,63 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
       warn(`Could not retrieve schema for data source ${dataSourceId} to sanitize configuration:`, schemaErr);
     }
 
-    const isEntryOrCanvas = dataSourceId === ENTRY_DB_ID || dataSourceId === CANVAS_DB_ID || fallbackDataSourceId === ENTRY_DB_ID || fallbackDataSourceId === CANVAS_DB_ID;
-    if (isEntryOrCanvas) {
-      if (!configuration) {
-        configuration = { properties: [] };
-      }
-      if (!configuration.properties || !Array.isArray(configuration.properties)) {
-        configuration.properties = [];
-      }
-      const titleProp = configuration.properties.find((p: any) => p.property_id === "title");
-      if (titleProp) {
-        titleProp.width = 100;
-      } else {
-        configuration.properties.push({
-          property_id: "title",
-          visible: true,
-          width: 100
-        });
+    if (!configuration) {
+      configuration = { properties: [] };
+    }
+    if (!configuration.properties || !Array.isArray(configuration.properties)) {
+      configuration.properties = [];
+    }
+    let titleProp = configuration.properties.find((p: any) => p.property_id === "title");
+    if (!titleProp) {
+      titleProp = {
+        property_id: "title",
+        property_name: "Name",
+        visible: true,
+        width: 100
+      };
+      configuration.properties.push(titleProp);
+    }
+
+    for (const prop of configuration.properties) {
+      const propId = prop.property_id;
+      const propName = (prop.property_name || "").trim();
+      const propNameLower = propName.toLowerCase();
+
+      if (fallbackDataSourceId === ENTRY_DB_ID) {
+        if (propId === "title" || propNameLower === "name") {
+          prop.width = 125;
+          prop.visible = true;
+        } else if (propNameLower === "type") {
+          prop.width = 125;
+        } else if (propNameLower === "created time") {
+          prop.visible = false;
+        } else if (propNameLower === "project") {
+          prop.visible = false;
+        } else if (propNameLower === "entries referenced") {
+          prop.width = 100;
+        } else if (propNameLower === "related back to entry") {
+          prop.width = 100;
+        } else if (propNameLower === "system prompt used") {
+          prop.width = 100;
+        } else if (propNameLower === "include") {
+          prop.width = 0;
+        }
+      } else if (fallbackDataSourceId === CANVAS_DB_ID) {
+        if (propId === "title" || propNameLower === "name") {
+          prop.width = 100;
+        } else if (propNameLower === "project") {
+          prop.visible = false;
+        }
+      } else if (fallbackDataSourceId === SYSTEM_PROMPT_DB_ID) {
+        if (propId === "title" || propNameLower === "name") {
+          prop.width = 150;
+        } else if (propNameLower === "include") {
+          prop.width = 0;
+        } else if (propNameLower === "priority") {
+          prop.width = 100;
+        } else if (propNameLower === "created time") {
+          prop.visible = false;
+        }
       }
     }
 
