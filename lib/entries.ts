@@ -1735,7 +1735,7 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
 }
 
 function getRichTextPlain(rt: any[]): string {
-  return rt?.map((t: any) => t.plain_text).join("") ?? "";
+  return rt?.map((t: any) => t.plain_text ?? t.text?.content ?? "").join("") ?? "";
 }
 
 function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>): string {
