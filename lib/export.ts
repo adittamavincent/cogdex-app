@@ -70,9 +70,16 @@ export async function readPageContent(pageId: string): Promise<string> {
     else if (type === "heading_3") lines.push(`### ${text}`);
     else if (type === "bulleted_list_item") lines.push(`- ${text}`);
     else if (type === "numbered_list_item") lines.push(`1. ${text}`);
+    else if (type === "to_do") {
+      const checked = (data as any)?.checked ? "x" : " ";
+      lines.push(`- [${checked}] ${text}`);
+    }
+    else if (type === "toggle") lines.push(text);
     else if (type === "code") {
-      const isDiff = (data as any)?.language === "diff" || text.startsWith("diff --git") || text.includes("diff --git");
-      if (!isDiff) lines.push(`\`\`\`\n${text}\n\`\`\``);
+      const lang = (data as any)?.language || "";
+      const outLang = lang === "plain text" ? "" : lang;
+      const isDiff = lang === "diff" || text.startsWith("diff --git") || text.includes("diff --git");
+      if (!isDiff) lines.push(`\`\`\`${outLang}\n${text}\n\`\`\``);
       else lines.push(text);
     }
     else if (type === "quote") lines.push(`> ${text}`);

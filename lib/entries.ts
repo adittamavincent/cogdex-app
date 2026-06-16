@@ -577,9 +577,10 @@ function matchLinesRelaxed(
   baseLines: Array<{ text: string, type: "normal" | "added" }>,
   baseIdx: number,
   searchLines: string[]
-): { matchedLength: number } | null {
+): { matchedLength: number, mapping: number[] } | null {
   let b = baseIdx;
   let s = 0;
+  const mapping: number[] = new Array(searchLines.length).fill(-1);
 
   while (s < searchLines.length) {
     const sLine = searchLines[s].trim();
@@ -602,11 +603,12 @@ function matchLinesRelaxed(
       return null;
     }
 
+    mapping[s] = b;
     b++;
     s++;
   }
 
-  return { matchedLength: b - baseIdx };
+  return { matchedLength: b - baseIdx, mapping };
 }
 
 export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
@@ -620,27 +622,30 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
   for (const hunk of sortedHunks) {
     const searchLines: string[] = [];
-    const replaceLines: { text: string, type: "normal" | "added" }[] = [];
+    interface Op { type: "normal" | "added" | "removed", text: string, searchIdx?: number }
+    const ops: Op[] = [];
 
     for (const line of hunk.lines) {
       if (line.startsWith("-")) {
         searchLines.push(line.slice(1));
+        ops.push({ type: "removed", text: line.slice(1), searchIdx: searchLines.length - 1 });
       } else if (line.startsWith("+")) {
-        replaceLines.push({ text: line.slice(1), type: "added" as const });
+        ops.push({ type: "added", text: line.slice(1) });
       } else if (line.startsWith(" ")) {
         searchLines.push(line.slice(1));
-        replaceLines.push({ text: line.slice(1), type: "normal" as const });
+        ops.push({ type: "normal", text: line.slice(1), searchIdx: searchLines.length - 1 });
       } else if (line.startsWith("\\")) {
         // Ignore
       } else {
         searchLines.push(line);
-        replaceLines.push({ text: line, type: "normal" as const });
+        ops.push({ type: "normal", text: line, searchIdx: searchLines.length - 1 });
       }
     }
 
     const hintIndex = Math.max(0, hunk.oldStart - 1);
     let foundIndex = -1;
     let matchedLength = 0;
+    let foundMapping: number[] | null = null;
     const maxOffset = Math.max(baseLines.length, 100);
 
     for (let offset = 0; offset < maxOffset; offset++) {
@@ -650,6 +655,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         if (matchResult) {
           foundIndex = idxForward;
           matchedLength = matchResult.matchedLength;
+          foundMapping = matchResult.mapping;
           break;
         }
       }
@@ -659,6 +665,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         if (matchResult) {
           foundIndex = idxBackward;
           matchedLength = matchResult.matchedLength;
+          foundMapping = matchResult.mapping;
           break;
         }
       }
@@ -666,16 +673,15 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
     if (foundIndex === -1) {
       let startTrim = 0;
-      while (startTrim < searchLines.length && hunk.lines[startTrim]?.startsWith(" ")) {
+      while (startTrim < searchLines.length && ops.find(o => o.searchIdx === startTrim)?.type === "normal" && searchLines[startTrim].trim() === "") {
         startTrim++;
       }
       let endTrim = 0;
-      while (endTrim < searchLines.length && hunk.lines[hunk.lines.length - 1 - endTrim]?.startsWith(" ")) {
+      while (endTrim < searchLines.length && ops.find(o => o.searchIdx === searchLines.length - 1 - endTrim)?.type === "normal" && searchLines[searchLines.length - 1 - endTrim].trim() === "") {
         endTrim++;
       }
 
       const trimmedSearch = searchLines.slice(startTrim, searchLines.length - endTrim);
-      const trimmedReplace = replaceLines.slice(startTrim, replaceLines.length - endTrim);
 
       if (trimmedSearch.length > 0) {
         for (let offset = 0; offset < maxOffset; offset++) {
@@ -685,7 +691,11 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
             if (matchResult) {
               foundIndex = idxForward;
               matchedLength = matchResult.matchedLength;
-              replaceLines.splice(0, replaceLines.length, ...trimmedReplace);
+              // Adjust mapping back to full searchLines space
+              foundMapping = new Array(searchLines.length).fill(-1);
+              for (let i = 0; i < matchResult.mapping.length; i++) {
+                foundMapping[startTrim + i] = matchResult.mapping[i];
+              }
               break;
             }
           }
@@ -695,7 +705,10 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
             if (matchResult) {
               foundIndex = idxBackward;
               matchedLength = matchResult.matchedLength;
-              replaceLines.splice(0, replaceLines.length, ...trimmedReplace);
+              foundMapping = new Array(searchLines.length).fill(-1);
+              for (let i = 0; i < matchResult.mapping.length; i++) {
+                foundMapping[startTrim + i] = matchResult.mapping[i];
+              }
               break;
             }
           }
@@ -731,9 +744,58 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
     }
 
     if (foundIndex !== -1) {
-      baseLines.splice(foundIndex, matchedLength, ...replaceLines);
+      if (foundMapping) {
+        // Robust mapping-based patching
+        const newLines: { text: string, type: "normal" | "added" }[] = [];
+        let b = foundIndex;
+
+        for (const op of ops) {
+          if (op.type === "added") {
+            newLines.push({ text: op.text, type: "added" });
+          } else {
+            const mappedB = op.searchIdx !== undefined ? foundMapping[op.searchIdx] : -1;
+            if (mappedB !== -1) {
+              while (b < mappedB) {
+                newLines.push(baseLines[b]);
+                b++;
+              }
+              if (op.type === "normal") {
+                newLines.push(baseLines[b]);
+              }
+              // If removed, we don't push baseLines[b]
+              b++;
+            } else {
+              // Not mapped (e.g. empty line in searchLines)
+              if (op.type === "normal") {
+                newLines.push({ text: op.text, type: "normal" });
+              }
+            }
+          }
+        }
+        // Push any remaining skipped lines within the matched block
+        while (b < foundIndex + matchedLength) {
+          newLines.push(baseLines[b]);
+          b++;
+        }
+        baseLines.splice(foundIndex, matchedLength, ...newLines);
+      } else {
+        // Fallback flattened patching uses replaceLines block replacement
+        const replaceLines: { text: string, type: "normal" | "added" }[] = [];
+        for (const op of ops) {
+          if (op.type === "added" || op.type === "normal") {
+            replaceLines.push({ text: op.text, type: op.type });
+          }
+        }
+        baseLines.splice(foundIndex, matchedLength, ...replaceLines);
+      }
     } else {
       if (baseText.trim() === "") {
+        const replaceLines: { text: string, type: "normal" | "added" }[] = [];
+        for (const op of ops) {
+          if (op.type === "added" || op.type === "normal") {
+            replaceLines.push({ text: op.text, type: op.type });
+          }
+        }
         return replaceLines;
       }
       warn(`Could not apply hunk starting at line ${hunk.oldStart}`);
