@@ -1730,8 +1730,8 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
     warn(`Failed to link Project to Memorandum:`, err);
   }
 
-  // 5. Update content inside memorandum page based on diff only
-  const forceWipe = memorandumEntries.length <= 1;
+  // 5. Rebuild memorandum page from the fully patched markdown.
+  const forceWipe = true;
   await updatePageBlocks(memorandumPageId, currentContent, false, forceWipe);
   debug(`Finished updating memorandum page ${memorandumPageId} with latest content (forceWipe: ${forceWipe})`);
 }
