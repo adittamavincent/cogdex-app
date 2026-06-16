@@ -1862,7 +1862,7 @@ async function fetchBlocksRecursive(blockId: string): Promise<any[]> {
   }
 
   for (const block of blocks) {
-    if (block.has_children && block.type !== "table") {
+    if (block.has_children) {
       block.children = await fetchBlocksRecursive(block.id);
     }
   }
@@ -1993,7 +1993,8 @@ export async function updatePageBlocks(
 
       if (
         TEXT_BLOCK_TYPES.has(oldBlock.type) &&
-        TEXT_BLOCK_TYPES.has(newBlock.type)
+        TEXT_BLOCK_TYPES.has(newBlock.type) &&
+        oldBlock.type === newBlock.type
       ) {
         processedSteps.push({
           action: "update",
@@ -2192,4 +2193,3 @@ export async function setExclusiveInclude(projectId: string, entryType: string, 
     });
   }
 }
-

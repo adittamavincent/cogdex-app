@@ -22,6 +22,19 @@ interface NotionRichText {
   };
 }
 
+interface NotionBlockData {
+  rich_text?: NotionRichText[];
+  checked?: boolean;
+  language?: string;
+  has_column_header?: boolean;
+}
+
+interface NotionTableRowBlock {
+  table_row?: {
+    cells?: NotionRichText[][];
+  };
+}
+
 interface NotionPage {
   id: string;
   created_time: string;
@@ -42,13 +55,24 @@ interface NotionPage {
 
 // Read all text content from a Notion page (recursive blocks → plain text)
 export async function readPageContent(pageId: string): Promise<string> {
-  // SDK v5: blocks.children.list is unchanged
-  const blocks = await notion.blocks.children.list({ block_id: pageId });
+  // SDK v5: blocks.children.list is unchanged, but paginated.
+  const blocks: NotionBlock[] = [];
+  let hasMore = true;
+  let startCursor: string | undefined;
+  while (hasMore) {
+    const response = await notion.blocks.children.list({
+      block_id: pageId,
+      start_cursor: startCursor,
+    });
+    blocks.push(...response.results as unknown as NotionBlock[]);
+    hasMore = response.has_more;
+    startCursor = response.next_cursor ?? undefined;
+  }
   const lines: string[] = [];
 
-  for (const block of blocks.results as unknown as NotionBlock[]) {
+  for (const block of blocks) {
     const type = block.type;
-    const data = block[type] as { rich_text?: NotionRichText[] } | undefined;
+    const data = block[type] as NotionBlockData | undefined;
 
     if (!data) continue;
 
@@ -71,12 +95,12 @@ export async function readPageContent(pageId: string): Promise<string> {
     else if (type === "bulleted_list_item") lines.push(`- ${text}`);
     else if (type === "numbered_list_item") lines.push(`1. ${text}`);
     else if (type === "to_do") {
-      const checked = (data as any)?.checked ? "x" : " ";
+      const checked = data.checked ? "x" : " ";
       lines.push(`- [${checked}] ${text}`);
     }
     else if (type === "toggle") lines.push(text);
     else if (type === "code") {
-      const lang = (data as any)?.language || "";
+      const lang = data.language || "";
       const outLang = lang === "plain text" ? "" : lang;
       const isDiff = lang === "diff" || text.startsWith("diff --git") || text.includes("diff --git");
       if (!isDiff) lines.push(`\`\`\`${outLang}\n${text}\n\`\`\``);
@@ -85,17 +109,28 @@ export async function readPageContent(pageId: string): Promise<string> {
     else if (type === "quote") lines.push(`> ${text}`);
     else if (type === "divider") lines.push(`---`);
     else if (type === "table") {
-      const tableRows = await notion.blocks.children.list({ block_id: block.id });
-      const rowStrings = tableRows.results.map((rowBlock: any) => {
+      const tableRows: NotionTableRowBlock[] = [];
+      let tableHasMore = true;
+      let tableStartCursor: string | undefined;
+      while (tableHasMore) {
+        const tableResponse = await notion.blocks.children.list({
+          block_id: block.id,
+          start_cursor: tableStartCursor,
+        });
+        tableRows.push(...tableResponse.results as unknown as NotionTableRowBlock[]);
+        tableHasMore = tableResponse.has_more;
+        tableStartCursor = tableResponse.next_cursor ?? undefined;
+      }
+      const rowStrings = tableRows.map((rowBlock) => {
         const cells = rowBlock.table_row?.cells || [];
-        const cellStrings = cells.map((cell: any) => {
-          return cell.map((t: any) => t.plain_text).join("");
+        const cellStrings = cells.map((cell) => {
+          return cell.map((t) => t.plain_text).join("");
         });
         return `| ${cellStrings.join(" | ")} |`;
       });
       if (rowStrings.length > 0) {
-        if ((data as any).has_column_header) {
-          const colCount = (tableRows.results[0] as any).table_row?.cells?.length || 0;
+        if (data.has_column_header) {
+          const colCount = tableRows[0]?.table_row?.cells?.length || 0;
           const separator = `| ${Array(colCount).fill("---").join(" | ")} |`;
           lines.push([rowStrings[0], separator, ...rowStrings.slice(1)].join("\n"));
         } else {
