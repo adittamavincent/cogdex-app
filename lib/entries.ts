@@ -1696,46 +1696,6 @@ export async function updatePageBlocks(
   keepFirstBlock: boolean = false,
   forceWipe: boolean = false
 ): Promise<void> {
-  forceWipe = false; // Preserve templates/layouts/styling by avoiding destructive full wipes
-  if (forceWipe) {
-    let hasMore = true;
-    let startCursor: string | undefined = undefined;
-    let isFirstPage = true;
-
-    while (hasMore) {
-      const listResponse = await notion.blocks.children.list({
-        block_id: pageId,
-        start_cursor: startCursor,
-      });
-
-      if (listResponse.results.length > 0) {
-        const blocksToDelete = (keepFirstBlock && isFirstPage)
-          ? listResponse.results.slice(1)
-          : listResponse.results;
-        await Promise.all(
-          blocksToDelete.map((block) =>
-            notion.blocks.delete({ block_id: block.id })
-          )
-        );
-      }
-
-      isFirstPage = false;
-      hasMore = listResponse.has_more;
-      startCursor = listResponse.next_cursor ?? undefined;
-    }
-
-    let newBlocks = markdownToRichNotionBlocks(newMarkdown);
-    newBlocks = newBlocks.map(b => cleanBlock(b));
-    const CHUNK = 100;
-    for (let i = 0; i < newBlocks.length; i += CHUNK) {
-      await notion.blocks.children.append({
-        block_id: pageId,
-        children: newBlocks.slice(i, i + CHUNK) as any,
-      });
-    }
-    return;
-  }
-
   debug(`Fetching existing blocks recursively for page ${pageId}`);
   const nestedBlocks = await fetchBlocksRecursive(pageId);
 
@@ -1770,9 +1730,13 @@ export async function updatePageBlocks(
 
   // Pre-process diff steps to merge consecutive delete + insert of same type into update
   const processedSteps: any[] = [];
+  let matchCount = 0;
+
   for (let idx = 0; idx < diff.length; idx++) {
     const current = diff[idx];
     const next = diff[idx + 1];
+
+    if (current.action === "keep") matchCount++;
 
     if (
       current.action === "delete" &&
@@ -1791,11 +1755,37 @@ export async function updatePageBlocks(
           oldIdx: current.oldIdx,
           newIdx: next.newIdx
         });
+        matchCount++;
         idx++; // skip next insert
         continue;
       }
     }
     processedSteps.push(current);
+  }
+
+  const similarityRatio = matchCount / Math.max(oldSerialized.length, newSerialized.length, 1);
+  const isCompletelyDifferent = similarityRatio < 0.3;
+  
+  if (forceWipe || (isCompletelyDifferent && oldSerialized.length > 0)) {
+    debug(`Similarity ratio is ${similarityRatio.toFixed(2)}. Wiping and replacing blocks.`);
+    
+    const topLevelBlocksToDelete = oldBlocksToSync.filter(b => b.parentBlockId === pageId);
+    
+    const CHUNK = 50;
+    for (let i = 0; i < topLevelBlocksToDelete.length; i += CHUNK) {
+      const chunk = topLevelBlocksToDelete.slice(i, i + CHUNK);
+      await Promise.all(
+        chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err)))
+      );
+    }
+
+    for (let i = 0; i < newBlocks.length; i += CHUNK) {
+      await notion.blocks.children.append({
+        block_id: pageId,
+        children: newBlocks.slice(i, i + CHUNK) as any,
+      });
+    }
+    return;
   }
 
   const ops: ({ type: "delete"; id: string } | { type: "insert"; blocks: any[]; parentId: string; afterId?: string } | { type: "update"; id: string; oldType: string; newBlock: any })[] = [];
