@@ -1580,6 +1580,59 @@ function diffBlocks(
   return diff;
 }
 
+async function fetchBlocksRecursive(blockId: string): Promise<any[]> {
+  const blocks: any[] = [];
+  let hasMore = true;
+  let startCursor: string | undefined = undefined;
+  while (hasMore) {
+    const res = await notion.blocks.children.list({
+      block_id: blockId,
+      start_cursor: startCursor,
+    });
+    blocks.push(...res.results);
+    hasMore = res.has_more;
+    startCursor = res.next_cursor ?? undefined;
+  }
+
+  for (const block of blocks) {
+    if (block.has_children && block.type !== "table") {
+      block.children = await fetchBlocksRecursive(block.id);
+    }
+  }
+
+  return blocks;
+}
+
+function flattenBlocks(
+  blocks: any[],
+  parentId: string,
+  childBlocksMap: Map<string, any[]>
+): any[] {
+  const flat: any[] = [];
+  const ignoredTypes = new Set(["column_list", "column", "image"]);
+
+  for (const block of blocks) {
+    if (block.children && block.children.length > 0) {
+      childBlocksMap.set(block.id, block.children);
+    }
+
+    if (!ignoredTypes.has(block.type)) {
+      flat.push({
+        id: block.id,
+        type: block.type,
+        parentBlockId: parentId,
+        raw: block,
+      });
+    }
+
+    if (block.children && block.children.length > 0) {
+      flat.push(...flattenBlocks(block.children, block.id, childBlocksMap));
+    }
+  }
+
+  return flat;
+}
+
 export async function updatePageBlocks(
   pageId: string,
   newMarkdown: string,
@@ -1626,32 +1679,17 @@ export async function updatePageBlocks(
     return;
   }
 
-  const existingBlocks: any[] = [];
-  let hasMore = true;
-  let startCursor: string | undefined = undefined;
-  while (hasMore) {
-    const listResponse = await notion.blocks.children.list({
-      block_id: pageId,
-      start_cursor: startCursor,
-    });
-    existingBlocks.push(...listResponse.results);
-    hasMore = listResponse.has_more;
-    startCursor = listResponse.next_cursor ?? undefined;
-  }
+  debug(`Fetching existing blocks recursively for page ${pageId}`);
+  const nestedBlocks = await fetchBlocksRecursive(pageId);
 
   const childBlocksMap = new Map<string, any[]>();
-  for (const block of existingBlocks) {
-    if (block.type === "table" && block.has_children) {
-      const childrenRes = await notion.blocks.children.list({ block_id: block.id });
-      childBlocksMap.set(block.id, childrenRes.results);
-    }
-  }
+  const oldContentBlocks = flattenBlocks(nestedBlocks, pageId, childBlocksMap);
 
-  let oldBlocksToSync = existingBlocks;
+  let oldBlocksToSync = oldContentBlocks;
   let firstBlockToKeep: any = null;
-  if (keepFirstBlock && existingBlocks.length > 0) {
-    firstBlockToKeep = existingBlocks[0];
-    oldBlocksToSync = existingBlocks.slice(1);
+  if (keepFirstBlock && oldContentBlocks.length > 0) {
+    firstBlockToKeep = oldContentBlocks[0];
+    oldBlocksToSync = oldContentBlocks.slice(1);
   }
 
   let newBlocks = markdownToRichNotionBlocks(newMarkdown);
@@ -1660,8 +1698,9 @@ export async function updatePageBlocks(
   const oldSerialized = oldBlocksToSync.map(b => ({
     id: b.id,
     type: b.type,
-    md: serializeBlockToMarkdown(b, childBlocksMap),
-    raw: b,
+    parentBlockId: b.parentBlockId,
+    md: serializeBlockToMarkdown(b.raw, childBlocksMap),
+    raw: b.raw,
   }));
 
   const newSerialized = newBlocks.map(b => ({
@@ -1672,24 +1711,73 @@ export async function updatePageBlocks(
 
   const diff = diffBlocks(oldSerialized, newSerialized);
 
-  const ops: ({ type: "delete"; id: string } | { type: "insert"; blocks: any[]; afterId?: string })[] = [];
-  
-  let currentInsertRun: any[] = [];
-  let lastKnownId: string | undefined = undefined;
-  if (keepFirstBlock && firstBlockToKeep) {
-    lastKnownId = firstBlockToKeep.id;
+  // Pre-process diff steps to merge consecutive delete + insert of same type into update
+  const processedSteps: any[] = [];
+  for (let idx = 0; idx < diff.length; idx++) {
+    const current = diff[idx];
+    const next = diff[idx + 1];
+
+    if (
+      current.action === "delete" &&
+      next &&
+      next.action === "insert"
+    ) {
+      const oldBlock = oldSerialized[current.oldIdx!];
+      const newBlock = newSerialized[next.newIdx!];
+
+      const updatableTypes = new Set([
+        "paragraph", "heading_1", "heading_2", "heading_3", "heading_4", "heading_5", "heading_6",
+        "bulleted_list_item", "numbered_list_item", "quote", "callout", "code"
+      ]);
+
+      if (oldBlock.type === newBlock.type && updatableTypes.has(oldBlock.type)) {
+        processedSteps.push({
+          action: "update",
+          oldIdx: current.oldIdx,
+          newIdx: next.newIdx
+        });
+        idx++; // skip next insert
+        continue;
+      }
+    }
+    processedSteps.push(current);
   }
 
-  for (const step of diff) {
+  const ops: ({ type: "delete"; id: string } | { type: "insert"; blocks: any[]; parentId: string; afterId?: string } | { type: "update"; id: string; oldType: string; newBlock: any })[] = [];
+  
+  let currentInsertRun: any[] = [];
+  let lastKnownBlock: { id: string; parentBlockId: string } | null = null;
+  if (keepFirstBlock && firstBlockToKeep) {
+    lastKnownBlock = { id: firstBlockToKeep.id, parentBlockId: firstBlockToKeep.parentBlockId || pageId };
+  }
+
+  for (const step of processedSteps) {
     if (step.action === "keep") {
       if (currentInsertRun.length > 0) {
-        ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
+        const parentId = lastKnownBlock ? lastKnownBlock.parentBlockId : pageId;
+        ops.push({ type: "insert", blocks: currentInsertRun, parentId, afterId: lastKnownBlock?.id });
         currentInsertRun = [];
       }
-      lastKnownId = oldSerialized[step.oldIdx!].id;
+      const kept = oldSerialized[step.oldIdx!];
+      lastKnownBlock = { id: kept.id, parentBlockId: kept.parentBlockId || pageId };
+    } else if (step.action === "update") {
+      if (currentInsertRun.length > 0) {
+        const parentId = lastKnownBlock ? lastKnownBlock.parentBlockId : pageId;
+        ops.push({ type: "insert", blocks: currentInsertRun, parentId, afterId: lastKnownBlock?.id });
+        currentInsertRun = [];
+      }
+      const updated = oldSerialized[step.oldIdx!];
+      ops.push({
+        type: "update",
+        id: updated.id,
+        oldType: updated.type,
+        newBlock: newSerialized[step.newIdx!].raw
+      });
+      lastKnownBlock = { id: updated.id, parentBlockId: updated.parentBlockId || pageId };
     } else if (step.action === "delete") {
       if (currentInsertRun.length > 0) {
-        ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
+        const parentId = lastKnownBlock ? lastKnownBlock.parentBlockId : pageId;
+        ops.push({ type: "insert", blocks: currentInsertRun, parentId, afterId: lastKnownBlock?.id });
         currentInsertRun = [];
       }
       ops.push({ type: "delete", id: oldSerialized[step.oldIdx!].id });
@@ -1698,11 +1786,13 @@ export async function updatePageBlocks(
     }
   }
   if (currentInsertRun.length > 0) {
-    ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
+    const parentId = lastKnownBlock ? lastKnownBlock.parentBlockId : pageId;
+    ops.push({ type: "insert", blocks: currentInsertRun, parentId, afterId: lastKnownBlock?.id });
   }
 
-  // Execute all inserts first, then all deletes last, to prevent archived block errors during insert
+  // Execute all inserts and updates first, then all deletes last, to prevent archived block errors
   const insertOps = ops.filter((op) => op.type === "insert") as any[];
+  const updateOps = ops.filter((op) => op.type === "update") as any[];
   const deleteOps = ops.filter((op) => op.type === "delete") as any[];
 
   for (const op of insertOps) {
@@ -1712,7 +1802,7 @@ export async function updatePageBlocks(
       for (let k = 0; k < op.blocks.length; k += CHUNK) {
         const chunkBlocks = op.blocks.slice(k, k + CHUNK);
         const payload: any = {
-          block_id: pageId,
+          block_id: op.parentId,
           children: chunkBlocks as any,
         };
 
@@ -1739,6 +1829,24 @@ export async function updatePageBlocks(
       }
     } catch (err) {
       warn(`Failed to execute insert operation:`, err);
+    }
+  }
+
+  for (const op of updateOps) {
+    try {
+      const blockType = op.newBlock.type;
+      const updateData: any = {
+        rich_text: op.newBlock[blockType].rich_text
+      };
+      if (blockType === "code") {
+        updateData.language = op.newBlock.code.language;
+      }
+      await notion.blocks.update({
+        block_id: op.id,
+        [op.oldType]: updateData
+      } as any);
+    } catch (err) {
+      warn(`Failed to update block ${op.id}:`, err);
     }
   }
 
