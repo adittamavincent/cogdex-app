@@ -1649,73 +1649,52 @@ export async function updatePageBlocks(
     ops.push({ type: "insert", blocks: currentInsertRun, afterId: lastKnownId });
   }
 
-  // Execute operations sequentially in batches
-  for (const op of ops) {
-    if (op.type === "delete") {
-      try {
-        await notion.blocks.delete({ block_id: op.id });
-      } catch (err) {
-        warn(`Failed to delete block ${op.id}:`, err);
-      }
-    } else if (op.type === "insert") {
-      try {
-        if (op.afterId) {
-          const CHUNK = 100;
-          let currentAfterId = op.afterId;
-          for (let k = 0; k < op.blocks.length; k += CHUNK) {
-            const chunkBlocks = op.blocks.slice(k, k + CHUNK);
-            const res = await notion.blocks.children.append({
-              block_id: pageId,
-              children: chunkBlocks as any,
-              after: currentAfterId,
-            });
-            if (res.results && res.results.length > 0) {
-              currentAfterId = res.results[res.results.length - 1].id;
-            }
-          }
+  // Execute all inserts first, then all deletes last, to prevent archived block errors during insert
+  const insertOps = ops.filter((op) => op.type === "insert") as any[];
+  const deleteOps = ops.filter((op) => op.type === "delete") as any[];
+
+  for (const op of insertOps) {
+    try {
+      const CHUNK = 100;
+      let currentAfterId = op.afterId;
+      for (let k = 0; k < op.blocks.length; k += CHUNK) {
+        const chunkBlocks = op.blocks.slice(k, k + CHUNK);
+        const payload: any = {
+          block_id: pageId,
+          children: chunkBlocks as any,
+        };
+
+        if (currentAfterId) {
+          payload.position = {
+            type: "after_block",
+            after_block: { id: currentAfterId },
+          };
+        } else if (k === 0) {
+          payload.position = {
+            type: "start",
+          };
         } else {
-          // Prepend at index 0 (swap with first existing block if present)
-          if (oldSerialized.length > 0) {
-            const firstOldBlock = oldSerialized[0];
-            const firstNewBlock = op.blocks[0];
-            const blockType = firstNewBlock.type;
-            
-            await notion.blocks.update({
-              block_id: firstOldBlock.id,
-              [blockType]: firstNewBlock[blockType],
-            } as any);
-
-            const remainingNewBlocks = op.blocks.slice(1);
-            const restoreOldBlock = cleanBlock(firstOldBlock.raw);
-
-            const CHUNK = 100;
-            const prependedBlocks = [...remainingNewBlocks, restoreOldBlock];
-            let currentAfterId = firstOldBlock.id;
-            for (let k = 0; k < prependedBlocks.length; k += CHUNK) {
-              const chunkBlocks = prependedBlocks.slice(k, k + CHUNK);
-              const res = await notion.blocks.children.append({
-                block_id: pageId,
-                children: chunkBlocks as any,
-                after: currentAfterId,
-              });
-              if (res.results && res.results.length > 0) {
-                currentAfterId = res.results[res.results.length - 1].id;
-              }
-            }
-          } else {
-            const CHUNK = 100;
-            for (let k = 0; k < op.blocks.length; k += CHUNK) {
-              const chunkBlocks = op.blocks.slice(k, k + CHUNK);
-              await notion.blocks.children.append({
-                block_id: pageId,
-                children: chunkBlocks as any,
-              });
-            }
-          }
+          payload.position = {
+            type: "after_block",
+            after_block: { id: currentAfterId },
+          };
         }
-      } catch (err) {
-        warn(`Failed to execute insert operation:`, err);
+
+        const res = await notion.blocks.children.append(payload);
+        if (res.results && res.results.length > 0) {
+          currentAfterId = res.results[res.results.length - 1].id;
+        }
       }
+    } catch (err) {
+      warn(`Failed to execute insert operation:`, err);
+    }
+  }
+
+  for (const op of deleteOps) {
+    try {
+      await notion.blocks.delete({ block_id: op.id });
+    } catch (err) {
+      warn(`Failed to delete block ${op.id}:`, err);
     }
   }
 }
