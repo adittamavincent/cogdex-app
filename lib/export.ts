@@ -212,6 +212,7 @@ A previous Memorandum exists. You MUST output a unified git diff representing th
   \`\`\`
 - **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
 - **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
+- **Table & Format Context (CRITICAL)**: If modifying a table, list, or code block, you MUST include the table headers, block boundaries, or surrounding items as context lines to ensure the structure is preserved. Never abruptly output \`+\` or \`-\` lines without surrounding structural markers.
 - **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Memorandum entry.
 - **Scope**: Include only changed regions.
 - **No Full Document**: Do NOT output the full memorandum document. Output ONLY the diff code block.
@@ -243,6 +244,7 @@ Otherwise (if this is the absolute first Memorandum initialization and no Memora
   \`\`\`
 - **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
 - **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
+- **Table & Format Context (CRITICAL)**: If modifying a table, list, or code block, you MUST include the table headers, block boundaries, or surrounding items as context lines to ensure the structure is preserved. Never abruptly output \`+\` or \`-\` lines without surrounding structural markers.
 - **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Memorandum entry.
 - **Scope**: Include only changed regions.
 - **No Full Document**: Do NOT output the full memorandum document. Output ONLY the diff code block.
