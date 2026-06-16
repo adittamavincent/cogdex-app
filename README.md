@@ -1,6 +1,6 @@
 # Cogdex App
 
-Minimal Next.js (App Router) backend hosted on Vercel. Receives webhooks from Notion button automations to manage typed entries, export structured XML contexts, apply git diff patches, sync canvas code, and restore project-scoped database views.
+Minimal Next.js (App Router) backend hosted on Vercel. Receives webhooks from Notion button automations to manage typed entries, export structured XML contexts, apply git diff patches, sync memorandum code, and restore project-scoped database views.
 
 No user-facing frontend. No auth system. No database other than Notion. Single-user personal tool.
 
@@ -12,7 +12,7 @@ Buttons in Notion send webhooks to the Cogdex API, configured with a custom head
 
 ### Notion Page Types & Acronyms
 - **CHAT**: Regular chat/session
-- **MEMO**: Canvas/file management
+- **MEMO**: Memorandum/file management
 - **USER**: User input
 - **RESP**: Response
 - **EXPO**: Export
@@ -26,10 +26,10 @@ Buttons in Notion send webhooks to the Cogdex API, configured with a custom head
 |---|---|---|
 | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` | **Project Page** | Creates a new entry page in the **Entry** database linked to the project. |
 | `MEMO RESP` | **Entry Page** | Gathers previous version, applies git diff block patch, appends updated full file code back below diff. |
-| `MEMO UPDT` | **Project Page** | Gathers all `MEMO RESP` and `MEMO EXPO` entries for the project. Applies git diffs sequentially to construct latest file code. Writes updated content to a single Canvas page in the **Canvas** database (archives duplicates). Links project to canvas. |
-| `CHAT EXPO` | **Project Page** (As exporting endpoint) | Gathers `Include=true` Entries + System Prompts + latest Canvas. Exports `<cogdex>` XML block. Writes output to new `CHAT EXPO` page in the **Entry** database. |
+| `MEMO UPDT` | **Project Page** | Gathers all `MEMO RESP` and `MEMO EXPO` entries for the project. Applies git diffs sequentially to construct latest file code. Writes updated content to a single Memorandum page in the **Memorandum** database (archives duplicates). Links project to memorandum. |
+| `CHAT EXPO` | **Project Page** (As exporting endpoint) | Gathers `Include=true` Entries + System Prompts + latest Memorandum. Exports `<cogdex>` XML block. Writes output to new `CHAT EXPO` page in the **Entry** database. |
 | `CHAT CMNT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
-| `SYST LINK` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Canvas database views inside it based on template views, filtered to current Project. |
+| `SYST LINK` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Memorandum database views inside it based on template views, filtered to current Project. |
 
 ---
 
@@ -39,7 +39,7 @@ To sync properly with the codebase, configure these four databases in Notion:
 
 ### 1. Project Database
 - `Name` (Title)
-- `Canvas` (Relation → Canvas DB, single select/limit to 1 page)
+- `Memorandum` (Relation → Memorandum DB, single select/limit to 1 page)
 
 ### 2. Entry Database
 - `Name` (Title) — Stores the incremented entry number (e.g. `1`, `2`, `3`).
@@ -49,7 +49,7 @@ To sync properly with the codebase, configure these four databases in Notion:
 - `Entries Referenced` (Relation → Entry DB)
 - `System Prompt Used` (Relation → System Prompt DB)
 
-### 3. Canvas Database
+### 3. Memorandum Database
 - `Name` (Title) — Holds latest chronological entry number.
 - `Project` (Relation → Project DB)
 
@@ -109,13 +109,13 @@ COGDEX_WEBHOOK_SECRET=pick_a_long_random_string_here
 # Databases (IDs are 32-char hex strings)
 NOTION_ENTRY_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_SYSTEM_PROMPT_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_CANVAS_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_MEMORANDUM_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_BRANCH_DB_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # Templates for View Cloning
 NOTION_ENTRY_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 NOTION_SYSTEM_PROMPT_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-NOTION_CANVAS_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+NOTION_MEMORANDUM_VIEW_ID=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # Optional: customize incoming headers
 COGDEX_SECRET_HEADER=x-cogdex-secret

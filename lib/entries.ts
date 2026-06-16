@@ -5,7 +5,7 @@ import { readPageContent } from "./export";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
-const CANVAS_DB_ID = process.env.NOTION_CANVAS_DB_ID!;
+const MEMORANDUM_DB_ID = process.env.NOTION_MEMORANDUM_DB_ID!;
 
 const resolvedIds = new Map<string, string>();
 
@@ -112,12 +112,12 @@ export async function createEntry(params: {
   const nextNumber = await getNextEntryNumber(thoughtId);
 
   const excludedFromInclude = new Set([
-    "CHAT EXPO", "REG EXP",
-    "MEMO EXPO", "CNV EXP",
-    "MEMO RESP", "CNV RES",
+    "CHAT EXPO",
+    "MEMO EXPO",
+    "MEMO RESP",
     "REPO SNAP",
-    "MEMO UPDT", "CNV UPD",
-    "SYST LINK", "Relink Databases"
+    "MEMO UPDT",
+    "SYST LINK"
   ]);
 
   const properties: Record<string, unknown> = {
@@ -169,12 +169,12 @@ export async function updateExistingEntryProperties(params: {
   const currentName = currentNameProp?.title?.[0]?.plain_text ?? "";
 
   const excludedFromInclude = new Set([
-    "CHAT EXPO", "REG EXP",
-    "MEMO EXPO", "CNV EXP",
-    "MEMO RESP", "CNV RES",
+    "CHAT EXPO",
+    "MEMO EXPO",
+    "MEMO RESP",
     "REPO SNAP",
-    "MEMO UPDT", "CNV UPD",
-    "SYST LINK", "Relink Databases"
+    "MEMO UPDT",
+    "SYST LINK"
   ]);
 
   const properties: Record<string, unknown> = {
@@ -261,25 +261,25 @@ function markdownToNotionBlocks(md: string): Record<string, unknown>[] {
   return blocks;
 }
 
-export async function relinkDatabases(thoughtId: string): Promise<void> {
-  debug(`Starting relinkDatabases for page ${thoughtId}`);
+export async function handleSystemLink(thoughtId: string): Promise<void> {
+  debug(`Starting handleSystemLink for page ${thoughtId}`);
 
   // 1. Fetch original view configurations to clone sorting/ordering/formatting
   const ORIGINAL_ENTRY_VIEW_ID = process.env.NOTION_ENTRY_VIEW_ID;
   const ORIGINAL_SYSTEM_PROMPT_VIEW_ID = process.env.NOTION_SYSTEM_PROMPT_VIEW_ID;
-  const ORIGINAL_CANVAS_VIEW_ID = process.env.NOTION_CANVAS_VIEW_ID;
+  const ORIGINAL_MEMORANDUM_VIEW_ID = process.env.NOTION_MEMORANDUM_VIEW_ID;
 
-  if (!ORIGINAL_ENTRY_VIEW_ID || !ORIGINAL_SYSTEM_PROMPT_VIEW_ID || !ORIGINAL_CANVAS_VIEW_ID) {
+  if (!ORIGINAL_ENTRY_VIEW_ID || !ORIGINAL_SYSTEM_PROMPT_VIEW_ID || !ORIGINAL_MEMORANDUM_VIEW_ID) {
     throw new Error(
-      "Missing required view ID environment variables: NOTION_ENTRY_VIEW_ID, NOTION_SYSTEM_PROMPT_VIEW_ID, NOTION_CANVAS_VIEW_ID"
+      "Missing required view ID environment variables: NOTION_ENTRY_VIEW_ID, NOTION_SYSTEM_PROMPT_VIEW_ID, NOTION_MEMORANDUM_VIEW_ID"
     );
   }
 
-  debug(`Fetching original views: Entry=${ORIGINAL_ENTRY_VIEW_ID}, SystemPrompt=${ORIGINAL_SYSTEM_PROMPT_VIEW_ID}, Canvas=${ORIGINAL_CANVAS_VIEW_ID}`);
-  const [entryView, systemPromptView, canvasView] = await Promise.all([
+  debug(`Fetching original views: Entry=${ORIGINAL_ENTRY_VIEW_ID}, SystemPrompt=${ORIGINAL_SYSTEM_PROMPT_VIEW_ID}, Memorandum=${ORIGINAL_MEMORANDUM_VIEW_ID}`);
+  const [entryView, systemPromptView, memorandumView] = await Promise.all([
     notion.views.retrieve({ view_id: ORIGINAL_ENTRY_VIEW_ID }),
     notion.views.retrieve({ view_id: ORIGINAL_SYSTEM_PROMPT_VIEW_ID }),
-    notion.views.retrieve({ view_id: ORIGINAL_CANVAS_VIEW_ID }),
+    notion.views.retrieve({ view_id: ORIGINAL_MEMORANDUM_VIEW_ID }),
   ]);
 
   // 2. Wipe clean all blocks inside the current page
@@ -356,7 +356,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
       configuration.properties = [];
     }
 
-    if (fallbackDataSourceId === CANVAS_DB_ID) {
+    if (fallbackDataSourceId === MEMORANDUM_DB_ID) {
       const repoUrlKey = Object.keys(dbProperties).find(
         (key) => key.toLowerCase().trim() === "repo url"
       );
@@ -413,7 +413,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
         } else if (propNameLower === "include") {
           prop.width = 32;
         }
-      } else if (fallbackDataSourceId === CANVAS_DB_ID) {
+      } else if (fallbackDataSourceId === MEMORANDUM_DB_ID) {
         if (propId === "title" || propNameLower === "name") {
           prop.width = 100;
         } else if (propNameLower === "project") {
@@ -476,8 +476,8 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
 
   // 5. Create the cloned views sequentially
 
-  debug("Creating cloned Canvas database view");
-  await createClonedView(canvasView, CANVAS_DB_ID, projectFilterModifier);
+  debug("Creating cloned Memorandum database view");
+  await createClonedView(memorandumView, MEMORANDUM_DB_ID, projectFilterModifier);
 
   debug("Creating cloned Entry database view");
   await createClonedView(entryView, ENTRY_DB_ID, projectFilterModifier);
@@ -485,7 +485,7 @@ export async function relinkDatabases(thoughtId: string): Promise<void> {
   debug("Creating cloned System Prompt database view");
   await createClonedView(systemPromptView, SYSTEM_PROMPT_DB_ID);
 
-  debug(`Successfully finished relinkDatabases for page ${thoughtId}`);
+  debug(`Successfully finished handleSystemLink for page ${thoughtId}`);
 }
 
 export function isDiff(content: string): boolean {
@@ -1107,140 +1107,7 @@ function cleanBlock(obj: any): any {
   return obj;
 }
 
-export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
-  debug(`Starting handleCanvasUpdate for ID: ${triggeredId}`);
 
-  // Retrieve the page from Notion
-  const pageObj = await notion.pages.retrieve({ page_id: triggeredId }) as any;
-  if (!pageObj) {
-    throw new Error(`Page with ID ${triggeredId} not found.`);
-  }
-
-  let canvasEntryId = "";
-  let projectId = "";
-
-  const parentId = pageObj.parent.database_id || pageObj.parent.data_source_id;
-  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
-  const entryDbIdResolved = await resolveDataSourceId(ENTRY_DB_ID);
-
-  if (
-    parentId === CANVAS_DB_ID ||
-    parentId === canvasDbIdResolved ||
-    parentId === ENTRY_DB_ID ||
-    parentId === entryDbIdResolved
-  ) {
-    debug(`Triggered page ${triggeredId} is a Canvas/Entries Entry`);
-    canvasEntryId = triggeredId;
-    const projectProp = findProperty(pageObj.properties || {}, "Project");
-    projectId = projectProp?.relation?.[0]?.id;
-    if (!projectId) {
-      throw new Error(`Canvas Entry ${triggeredId} is not linked to any Project.`);
-    }
-  } else {
-    debug(`Triggered page ${triggeredId} is a Project page, searching for latest Canvas Entry`);
-    projectId = triggeredId;
-    let canvasPagesResponse;
-    try {
-      canvasPagesResponse = await notion.dataSources.query({
-        data_source_id: entryDbIdResolved,
-        filter: {
-          property: "Project", relation: { contains: projectId }
-        },
-        sorts: [{ timestamp: "created_time", direction: "descending" }]
-      });
-    } catch (err: any) {
-      if (err.code === "object_not_found") {
-        throw new Error(`Entries DB not found. Ensure the Entries DB is shared with the integration.`);
-      }
-      throw err;
-    }
-
-    const canvasEntries = canvasPagesResponse.results.filter((entry: any) => {
-      const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-      return type === "MEMO RESP" || type === "MEMO EXPO";
-    });
-
-    if (canvasEntries.length === 0) {
-      throw new Error(`No Canvas entry found for project ${projectId}.`);
-    }
-    canvasEntryId = canvasEntries[0].id;
-  }
-
-  // 1. Read diff content from target canvas page
-  let diffContent = await readPageContent(canvasEntryId);
-  debug(`Read diff content from canvas ${canvasEntryId} (length: ${diffContent.length})`);
-
-  diffContent = unwrapCodeFences(diffContent);
-
-  if (!isDiff(diffContent)) {
-    debug(`Content is not a git diff. Skipping merge update.`);
-    return;
-  }
-
-  // 2. Find previous canvas page in this project
-  const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: entryDbIdResolved,
-    filter: {
-      property: "Project", relation: { contains: projectId }
-    },
-    sorts: [{ timestamp: "created_time", direction: "descending" }]
-  });
-
-  const results = canvasPagesResponse.results.filter((entry: any) => {
-    const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-    return type === "MEMO RESP" || type === "MEMO EXPO";
-  });
-
-  const currentIdx = results.findIndex(r => r.id === canvasEntryId);
-  let previousCanvasId: string | null = null;
-  if (currentIdx !== -1 && currentIdx + 1 < results.length) {
-    previousCanvasId = results[currentIdx + 1].id;
-  }
-
-  let baseContent = "";
-  if (previousCanvasId) {
-    debug(`Found previous canvas: ${previousCanvasId}`);
-    const prevEntry = results.find(r => r.id === previousCanvasId);
-    const prevType = findProperty((prevEntry as any)?.properties || {}, "Type")?.select?.name;
-    const rawBase = await readPageContent(previousCanvasId);
-
-    if (prevType === "MEMO EXPO") {
-      const match = rawBase.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
-      baseContent = match ? match[1].trim() : "";
-    } else {
-      baseContent = unwrapCodeFences(rawBase);
-    }
-  } else {
-    debug(`No previous canvas found for project ${projectId}. Using empty content as base.`);
-  }
-
-  // 3. Apply git diff to get full text
-  const patchedLines = applyPatch(baseContent, diffContent);
-  const fullText = patchedLines.map(l => l.text).join("\n");
-
-  // 4. Update blocks based on diff only (avoiding full wipe)
-  const forceWipe = results.length <= 1;
-  await updatePageBlocks(canvasEntryId, fullText, true, forceWipe);
-  debug(`Finished updating canvas page ${canvasEntryId} (forceWipe: ${forceWipe})`);
-
-  // 5. Toggle off Include for other canvases, and toggle on for current canvas
-  await Promise.all(
-    results.map(async (r) => {
-      const isCurrent = r.id === canvasEntryId;
-      const currentInclude = findProperty((r as any).properties || {}, "Include")?.checkbox;
-      const targetInclude = isCurrent;
-      if (currentInclude !== targetInclude) {
-        debug(`Setting Include to ${targetInclude} for canvas entry ${r.id}`);
-        await notion.pages.update({
-          page_id: r.id,
-          properties: {
-            Include: { checkbox: targetInclude }
-          }
-        });
-      }
-    })
-  );
-}
 
 function sanitizeRichText(richTexts: any[]): any[] {
   if (!richTexts) return [];
@@ -1422,44 +1289,44 @@ export async function handleUserComment(triggeredId: string) {
     startCursor = listResponse.next_cursor ?? undefined;
   }
 
-  // Fetch all blocks from the canvas page (if exists)
-  const canvasBlocks: any[] = [];
-  let canvasPageId = "";
+  // Fetch all blocks from the memorandum page (if exists)
+  const memorandumBlocks: any[] = [];
+  let memorandumPageId = "";
   try {
-    const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
-    const canvasPagesResponse = await notion.dataSources.query({
-      data_source_id: canvasDbIdResolved,
+    const memorandumDbIdResolved = await resolveDataSourceId(MEMORANDUM_DB_ID);
+    const memorandumPagesResponse = await notion.dataSources.query({
+      data_source_id: memorandumDbIdResolved,
       filter: {
         property: "Project",
         relation: { contains: projectId }
       }
     });
 
-    if (canvasPagesResponse.results.length > 0) {
-      canvasPageId = canvasPagesResponse.results[0].id;
-      let canvasHasMore = true;
-      let canvasStartCursor: string | undefined;
-      while (canvasHasMore) {
+    if (memorandumPagesResponse.results.length > 0) {
+      memorandumPageId = memorandumPagesResponse.results[0].id;
+      let memorandumHasMore = true;
+      let memorandumStartCursor: string | undefined;
+      while (memorandumHasMore) {
         const listResponse = await notion.blocks.children.list({
-          block_id: canvasPageId,
-          start_cursor: canvasStartCursor,
+          block_id: memorandumPageId,
+          start_cursor: memorandumStartCursor,
         });
-        canvasBlocks.push(...listResponse.results);
-        canvasHasMore = listResponse.has_more;
-        canvasStartCursor = listResponse.next_cursor ?? undefined;
+        memorandumBlocks.push(...listResponse.results);
+        memorandumHasMore = listResponse.has_more;
+        memorandumStartCursor = listResponse.next_cursor ?? undefined;
       }
     }
   } catch (err) {
-    warn("Failed to retrieve canvas page blocks for comments copy:", err);
+    warn("Failed to retrieve memorandum page blocks for comments copy:", err);
   }
 
     // 3. For each block/page, fetch comments
   const newBlocks: any[] = [];
   const itemsToScan: Array<{ id: string; type: string; raw?: any }> = [
     ...blocks.map(b => ({ id: b.id, type: b.type, raw: b })),
-    ...canvasBlocks.map(b => ({ id: b.id, type: b.type, raw: b })),
+    ...memorandumBlocks.map(b => ({ id: b.id, type: b.type, raw: b })),
     { id: sourceEntry.id, type: "page" },
-    ...(canvasPageId ? [{ id: canvasPageId, type: "page" }] : [])
+    ...(memorandumPageId ? [{ id: memorandumPageId, type: "page" }] : [])
   ];
 
   for (const item of itemsToScan) {
@@ -1524,11 +1391,11 @@ export async function handleUserComment(triggeredId: string) {
   }
 }
 
-export async function handleCNVUPD(thoughtId: string): Promise<void> {
-  debug(`Starting handleCNVUPD for Project ID: ${thoughtId}`);
+export async function handleMemoUpdate(thoughtId: string): Promise<void> {
+  debug(`Starting handleMemoUpdate for Project ID: ${thoughtId}`);
 
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
-  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
+  const memorandumDbIdResolved = await resolveDataSourceId(MEMORANDUM_DB_ID);
 
   // 1. Gather all entries of type "MEMO RESP" and "MEMO EXPO" for the project
   const entriesResponse = await notion.dataSources.query({
@@ -1539,13 +1406,13 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     }
   });
 
-  const canvasEntries = entriesResponse.results.filter((entry: any) => {
+  const memorandumEntries = entriesResponse.results.filter((entry: any) => {
     const type = findProperty(entry.properties || {}, "Type")?.select?.name;
     return type === "MEMO RESP" || type === "MEMO EXPO";
   });
 
   // Sort them chronologically by their Name (converted to integer or alphanumerically)
-  canvasEntries.sort((a: any, b: any) => {
+  memorandumEntries.sort((a: any, b: any) => {
     const nameA = findProperty(a.properties || {}, "Name")?.title?.[0]?.plain_text || "";
     const nameB = findProperty(b.properties || {}, "Name")?.title?.[0]?.plain_text || "";
     const matchA = nameA.match(/\d+/);
@@ -1558,13 +1425,13 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     return nameA.localeCompare(nameB, undefined, { numeric: true });
   });
 
-  debug(`Found ${canvasEntries.length} canvas entries to process`);
+  debug(`Found ${memorandumEntries.length} memorandum entries to process`);
 
   // 2. Apply git diffs sequentially
   let currentContent = "";
   let latestEntryNumber = "";
 
-  for (const entry of canvasEntries) {
+  for (const entry of memorandumEntries) {
     const nameProp = findProperty((entry as any).properties || {}, "Name");
     const entryNum = nameProp?.title?.[0]?.plain_text ?? "";
     if (entryNum) {
@@ -1575,7 +1442,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     const content = await readPageContent(entry.id);
 
     if (type === "MEMO EXPO") {
-      const match = content.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
+      const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
@@ -1588,64 +1455,64 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     }
   }
 
-  // 3. Find existing canvas page in Canvas DB for this project
-  const canvasPagesResponse = await notion.dataSources.query({
-    data_source_id: canvasDbIdResolved,
+  // 3. Find existing memorandum page in Memorandum DB for this project
+  const memorandumPagesResponse = await notion.dataSources.query({
+    data_source_id: memorandumDbIdResolved,
     filter: {
       property: "Project", relation: { contains: thoughtId }
     }
   });
 
-  let canvasPageId = "";
-  const results = canvasPagesResponse.results;
+  let memorandumPageId = "";
+  const results = memorandumPagesResponse.results;
 
   if (results.length > 0) {
-    canvasPageId = results[0].id;
-    debug(`Using existing canvas page ${canvasPageId}`);
+    memorandumPageId = results[0].id;
+    debug(`Using existing memorandum page ${memorandumPageId}`);
 
     // Update title/Name to the chronological number from entries
     await notion.pages.update({
-      page_id: canvasPageId,
+      page_id: memorandumPageId,
       properties: {
         Name: { title: [{ text: { content: latestEntryNumber || "1" } }] }
       }
     });
 
-    // Enforce "only allow 1 canvas only" by archiving other duplicate canvas pages
+    // Enforce "only allow 1 memorandum only" by archiving other duplicate memorandum pages
     if (results.length > 1) {
-      debug(`Archiving ${results.length - 1} duplicate canvas pages`);
+      debug(`Archiving ${results.length - 1} duplicate memorandum pages`);
       await Promise.all(
         results.slice(1).map(r => notion.pages.update({ page_id: r.id, in_trash: true }))
       );
     }
   } else {
-    debug(`Creating new canvas page in Canvas DB`);
-    const canvasPage = await notion.pages.create({
-      parent: { data_source_id: canvasDbIdResolved },
+    debug(`Creating new memorandum page in Memorandum DB`);
+    const memorandumPage = await notion.pages.create({
+      parent: { data_source_id: memorandumDbIdResolved },
       properties: {
         Name: { title: [{ text: { content: latestEntryNumber || "1" } }] },
         Project: { relation: [{ id: thoughtId }] }
       }
     });
-    canvasPageId = canvasPage.id;
+    memorandumPageId = memorandumPage.id;
   }
 
-  // 4. Link Project to Canvas
+  // 4. Link Project to Memorandum
   try {
     await notion.pages.update({
       page_id: thoughtId,
       properties: {
-        Canvas: { relation: [{ id: canvasPageId }] }
+        Memorandum: { relation: [{ id: memorandumPageId }] }
       }
     });
   } catch (err) {
-    warn(`Failed to link Project to Canvas:`, err);
+    warn(`Failed to link Project to Memorandum:`, err);
   }
 
-  // 5. Update content inside canvas page based on diff only
-  const forceWipe = canvasEntries.length <= 1;
-  await updatePageBlocks(canvasPageId, currentContent, false, forceWipe);
-  debug(`Finished updating canvas page ${canvasPageId} with latest content (forceWipe: ${forceWipe})`);
+  // 5. Update content inside memorandum page based on diff only
+  const forceWipe = memorandumEntries.length <= 1;
+  await updatePageBlocks(memorandumPageId, currentContent, false, forceWipe);
+  debug(`Finished updating memorandum page ${memorandumPageId} with latest content (forceWipe: ${forceWipe})`);
 }
 
 function getRichTextPlain(rt: any[]): string {

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, relinkDatabases, handleCanvasUpdate, handleUserComment, handleCNVUPD, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry } from "@/lib/entries";
+import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -34,16 +34,6 @@ const CREATABLE_ENTRY_TYPES: PageType[] = [
   "REPO SNAP",
 ];
 
-const DEPRECATED_PAGE_TYPE_MAP: Record<string, PageType> = {
-  "REG USR": "CHAT USER",
-  "REG RES": "CHAT RESP",
-  "REG EXP": "CHAT EXPO",
-  "REG USR CMT": "CHAT CMNT",
-  "CNV EXP": "MEMO EXPO",
-  "CNV RES": "MEMO RESP",
-  "CNV UPD": "MEMO UPDT",
-  "Relink Databases": "SYST LINK",
-};
 
 export async function POST(req: NextRequest) {
   // --- Auth ---
@@ -63,7 +53,7 @@ export async function POST(req: NextRequest) {
     req.headers.get("cogdex-page-type") ||
     req.headers.get("x-cogdex-page-type");
 
-  const pageTypeHeader = (rawPageTypeHeader && DEPRECATED_PAGE_TYPE_MAP[rawPageTypeHeader]) || rawPageTypeHeader;
+  const pageTypeHeader = rawPageTypeHeader;
 
   if (!pageTypeHeader || !VALID_PAGE_TYPES.includes(pageTypeHeader as PageType)) {
     return Response.json(
@@ -136,28 +126,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (pageType === "SYST LINK") {
-      await relinkDatabases(projectId);
+      await handleSystemLink(projectId);
       return Response.json({ ok: true });
     }
 
-    if (pageType === "MEMO RESP") {
-      if (entryId) {
-        await updateExistingEntryProperties({
-          entryId,
-          projectId,
-          pageType: "MEMO RESP",
-          pageObj,
-        });
-        await handleCanvasUpdate(entryId);
-        return Response.json({ ok: true });
-      } else {
-        const result = await createEntry({ thoughtId: projectId, pageType: "MEMO RESP" });
-        return Response.json({ ok: true, ...result });
-      }
-    }
+
 
     if (pageType === "MEMO UPDT") {
-      await handleCNVUPD(projectId);
+      await handleMemoUpdate(projectId);
       return Response.json({ ok: true });
     }
 
@@ -168,22 +144,22 @@ export async function POST(req: NextRequest) {
 
     if (pageType === "REPO SNAP") {
       const projectPage = await notion.pages.retrieve({ page_id: projectId }) as any;
-      const canvasRelations = projectPage.properties?.Canvas?.relation || [];
-      if (canvasRelations.length === 0) {
-        return Response.json({ error: "No Canvas entry linked to this project" }, { status: 400 });
+      const memorandumRelations = projectPage.properties?.Memorandum?.relation || [];
+      if (memorandumRelations.length === 0) {
+        return Response.json({ error: "No Memorandum entry linked to this project" }, { status: 400 });
       }
       
-      const canvasId = canvasRelations[0].id;
-      const canvasPage = await notion.pages.retrieve({ page_id: canvasId }) as any;
+      const memorandumId = memorandumRelations[0].id;
+      const memorandumPage = await notion.pages.retrieve({ page_id: memorandumId }) as any;
       
-      const repoUrlProp = canvasPage.properties?.["Repo URL"] || Object.values(canvasPage.properties || {}).find((p: any) => p.id === "ySdk");
+      const repoUrlProp = memorandumPage.properties?.["Repo URL"] || Object.values(memorandumPage.properties || {}).find((p: any) => p.id === "ySdk");
       const repoUrl = repoUrlProp?.rich_text?.[0]?.plain_text || repoUrlProp?.url;
       
       if (!repoUrl) {
-        const canvasTitle = canvasPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
+        const memorandumTitle = memorandumPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
         return Response.json(
           {
-            error: `No Repo URL set on Canvas page "${canvasTitle}". Go to ${canvasPage.url} and fill in the "Repo URL" property.`,
+            error: `No Repo URL set on Memorandum page "${memorandumTitle}". Go to ${memorandumPage.url} and fill in the "Repo URL" property.`,
           },
           { status: 400 }
         );

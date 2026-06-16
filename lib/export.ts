@@ -4,7 +4,7 @@ import type { BlockObjectRequest } from "@notionhq/client";
 
 const ENTRY_DB_ID = process.env.NOTION_ENTRY_DB_ID || process.env.NOTION_ENTRIES_DB_ID!;
 const SYSTEM_PROMPT_DB_ID = process.env.NOTION_SYSTEM_PROMPT_DB_ID!;
-const CANVAS_DB_ID = process.env.NOTION_CANVAS_DB_ID!;
+const MEMORANDUM_DB_ID = process.env.NOTION_MEMORANDUM_DB_ID!;
 
 interface NotionBlock {
   type: string;
@@ -125,12 +125,12 @@ async function getIncludedEntries(thoughtId: string) {
   const rawEntries = response.results as unknown as NotionPage[];
   
   const excludedTypes = new Set([
-    "CHAT EXPO", "REG EXP",
-    "MEMO EXPO", "CNV EXP",
-    "MEMO RESP", "CNV RES",
-    "MEMO UPDT", "CNV UPD",
+    "CHAT EXPO",
+    "MEMO EXPO",
+    "MEMO RESP",
+    "MEMO UPDT",
     "REPO SNAP",
-    "SYST LINK", "Relink Databases"
+    "SYST LINK"
   ]);
 
   const entries = rawEntries.filter((e) => {
@@ -158,12 +158,12 @@ async function getIncludedSystemPrompts() {
   return response.results as unknown as NotionPage[];
 }
 
-async function getLatestCanvas(thoughtId: string): Promise<NotionPage | null> {
-  if (!CANVAS_DB_ID) return null;
-  const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
+async function getLatestMemorandum(thoughtId: string): Promise<NotionPage | null> {
+  if (!MEMORANDUM_DB_ID) return null;
+  const memorandumDbIdResolved = await resolveDataSourceId(MEMORANDUM_DB_ID);
   try {
     const response = await notion.dataSources.query({
-      data_source_id: canvasDbIdResolved,
+      data_source_id: memorandumDbIdResolved,
       filter: {
         property: "Project",
         relation: { contains: thoughtId }
@@ -175,14 +175,14 @@ async function getLatestCanvas(thoughtId: string): Promise<NotionPage | null> {
     return response.results[0] as unknown as NotionPage;
   } catch (err: any) {
     if (err.code === "object_not_found") {
-      console.warn("Canvas DB not found or not shared with integration. Skipping Canvas export.");
+      console.warn("Memorandum DB not found or not shared with integration. Skipping Memorandum export.");
       return null;
     }
     throw err;
   }
 }
 
-function getDefaultProtocol(isCanvasExport: boolean, hasCanvas: boolean): string {
+function getDefaultProtocol(isMemorandumExport: boolean, hasMemorandum: boolean): string {
   const commonHeader = `# Cogdex Operational Protocol
 
 This prompt establishes the protocol between the LLM and the Notion-based Cogdex workspace.
@@ -195,11 +195,11 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 4. If context is incomplete/ambiguous, state the gap explicitly.
 `;
 
-  if (isCanvasExport) {
-    if (hasCanvas) {
+  if (isMemorandumExport) {
+    if (hasMemorandum) {
       return `${commonHeader}
-## Canvas Output Mode (Git Diff Required)
-A previous Canvas exists. You MUST output a unified git diff representing the changes to apply to the existing Canvas.
+## Memorandum Output Mode (Git Diff Required)
+A previous Memorandum exists. You MUST output a unified git diff representing the changes to apply to the existing Memorandum.
 
 ### Strictly Paste-Ready Unified Diff Contract
 - **Fenced Code Block ONLY**: The diff MUST be wrapped in a code block with the \`diff\` language tag:
@@ -212,27 +212,27 @@ A previous Canvas exists. You MUST output a unified git diff representing the ch
   \`\`\`
 - **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
 - **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
-- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Canvas entry.
+- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Memorandum entry.
 - **Scope**: Include only changed regions.
-- **No Full Document**: Do NOT output the full canvas document. Output ONLY the diff code block.
+- **No Full Document**: Do NOT output the full memorandum document. Output ONLY the diff code block.
 
-### Canvas Content Rules
+### Memorandum Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
 Do NOT include: conversation history, reasoning, drafts, or TODO lists.
 `;
     } else {
       return `${commonHeader}
-## Canvas Output Mode (Full Document or Git Diff)
-If a Canvas has ALREADY been created/defined in this chat session OR is present in the <context> below (e.g. as a CNV RES/CNV EXP entry), you MUST output a unified git diff representing the changes.
-Otherwise (if this is the absolute first Canvas initialization and no Canvas exists in history/chat memory yet), you MUST output the full Canvas document.
+## Memorandum Output Mode (Full Document or Git Diff)
+If a Memorandum has ALREADY been created/defined in this chat session OR is present in the <context> below (e.g. as a MEMO RESP/MEMO EXPO entry), you MUST output a unified git diff representing the changes.
+Otherwise (if this is the absolute first Memorandum initialization and no Memorandum exists in history/chat memory yet), you MUST output the full Memorandum document.
 
 ### Option A: Full Document (First Time Only)
-- Output the complete Canvas content as plain markdown.
+- Output the complete Memorandum content as plain markdown.
 - Do NOT wrap it in a diff block or code block.
 - Do NOT add \`+\` prefixes.
-- This will be pasted directly into the blank Notion Canvas page.
+- This will be pasted directly into the blank Notion Memorandum page.
 
-### Option B: Git Diff (If Canvas Already Exists in Memory/Context)
+### Option B: Git Diff (If Memorandum Already Exists in Memory/Context)
 - **Fenced Code Block ONLY**: The diff MUST be wrapped in a code block with the \`diff\` language tag:
   \`\`\`diff
   @@ -1,5 +1,7 @@
@@ -243,11 +243,11 @@ Otherwise (if this is the absolute first Canvas initialization and no Canvas exi
   \`\`\`
 - **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
 - **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
-- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Canvas entry.
+- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Memorandum entry.
 - **Scope**: Include only changed regions.
-- **No Full Document**: Do NOT output the full canvas document. Output ONLY the diff code block.
+- **No Full Document**: Do NOT output the full memorandum document. Output ONLY the diff code block.
 
-### Canvas Content Rules
+### Memorandum Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
 Do NOT include: conversation history, reasoning, drafts, or TODO lists.
 `;
@@ -269,17 +269,17 @@ Produce a regular response entry answering the user's intent.
   }
 }
 
-// Fetch the latest canvas content, falling back to reconstructing from Entries DB if Canvas DB doesn't have it.
-async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage | null): Promise<{ content: string; title: string } | null> {
-  if (latestCanvasPage) {
+// Fetch the latest memorandum content, falling back to reconstructing from Entries DB if Memorandum DB doesn't have it.
+async function getMemorandumContent(thoughtId: string, latestMemorandumPage: NotionPage | null): Promise<{ content: string; title: string } | null> {
+  if (latestMemorandumPage) {
     try {
-      const canvasContent = await readPageContent(latestCanvasPage.id);
-      if (canvasContent && canvasContent.trim()) {
-        const title = latestCanvasPage.properties?.Name?.title?.[0]?.plain_text ?? latestCanvasPage.properties?.Title?.title?.[0]?.plain_text ?? "Canvas";
-        return { content: canvasContent.trim(), title };
+      const memorandumContent = await readPageContent(latestMemorandumPage.id);
+      if (memorandumContent && memorandumContent.trim()) {
+        const title = latestMemorandumPage.properties?.Name?.title?.[0]?.plain_text ?? latestMemorandumPage.properties?.Title?.title?.[0]?.plain_text ?? "Memorandum";
+        return { content: memorandumContent.trim(), title };
       }
     } catch (err) {
-      console.warn(`Failed to read canvas page ${latestCanvasPage.id}, falling back to Entries DB:`, err);
+      console.warn(`Failed to read memorandum page ${latestMemorandumPage.id}, falling back to Entries DB:`, err);
     }
   }
 
@@ -292,17 +292,16 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
     }
   });
 
-  const canvasEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
+  const memorandumEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
     const type = entry.properties?.Type?.select?.name;
-    return type === "MEMO RESP" || type === "MEMO EXPO" || type === "MEMO UPDT" ||
-           type === "CNV RES" || type === "CNV EXP" || type === "CNV UPD";
+    return type === "MEMO RESP" || type === "MEMO EXPO" || type === "MEMO UPDT";
   });
 
-  if (canvasEntries.length === 0) {
+  if (memorandumEntries.length === 0) {
     return null;
   }
 
-  canvasEntries.sort((a, b) => {
+  memorandumEntries.sort((a, b) => {
     const nameA = a.properties?.Name?.title?.[0]?.plain_text ?? a.properties?.Title?.title?.[0]?.plain_text ?? "";
     const nameB = b.properties?.Name?.title?.[0]?.plain_text ?? b.properties?.Title?.title?.[0]?.plain_text ?? "";
     const numA = parseInt(nameA.match(/\d+/)?.[0] ?? "0", 10);
@@ -311,17 +310,17 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
   });
 
   let currentContent = "";
-  let latestTitle = "Canvas";
+  let latestTitle = "Memorandum";
 
-  for (const entry of canvasEntries) {
+  for (const entry of memorandumEntries) {
     const name = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     if (name) latestTitle = name;
 
     const type = entry.properties?.Type?.select?.name;
     const content = await readPageContent(entry.id);
 
-    if (type === "MEMO EXPO" || type === "CNV EXP") {
-      const match = content.match(/<entry\s+type="(?:MEMO|CNV)(?: EXPO| EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
+    if (type === "MEMO EXPO") {
+      const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
@@ -361,27 +360,27 @@ async function getLatestRepoSnap(thoughtId: string): Promise<string | null> {
 }
 
 // Build the full XML context string and return the involved entry/prompt IDs
-async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
-  const [entries, prompts, latestCanvas, latestRepoSnap] = await Promise.all([
+async function buildXML(thoughtId: string, isMemorandumExport: boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
+  const [entries, prompts, latestMemorandum, latestRepoSnap] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
-    getLatestCanvas(thoughtId),
+    getLatestMemorandum(thoughtId),
     getLatestRepoSnap(thoughtId),
   ]);
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
-  const [promptContents, entryContents, canvasContentObj] = await Promise.all([
+  const [promptContents, entryContents, memorandumContentObj] = await Promise.all([
     Promise.all(prompts.map((p) => readPageContent(p.id))),
     Promise.all(entries.map((entry) => readPageContent(entry.id))),
-    getCanvasContent(thoughtId, latestCanvas),
+    getMemorandumContent(thoughtId, latestMemorandum),
   ]);
 
   const lines: string[] = [];
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  const hasCanvas = (latestCanvas !== null) || (canvasContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "MEMO RESP");
-  lines.push(getDefaultProtocol(isCanvasExport, hasCanvas));
+  const hasMemorandum = (latestMemorandum !== null) || (memorandumContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "MEMO RESP");
+  lines.push(getDefaultProtocol(isMemorandumExport, hasMemorandum));
   if (promptContents.length > 0) {
     lines.push("");
     lines.push(promptContents.join("\n\n"));
@@ -403,10 +402,10 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
     lines.push(`  </entry>`);
   }
 
-  if (canvasContentObj) {
-    const tAttr = canvasContentObj.title.replace(/"/g, '&quot;');
-    lines.push(`  <entry type="CNV" title="${tAttr}">`);
-    lines.push(canvasContentObj.content);
+  if (memorandumContentObj) {
+    const tAttr = memorandumContentObj.title.replace(/"/g, '&quot;');
+    lines.push(`  <entry type="MEMO" title="${tAttr}">`);
+    lines.push(memorandumContentObj.content);
     lines.push(`  </entry>`);
   }
   lines.push("</context>");
@@ -488,20 +487,20 @@ function xmlToNotionBlocks(xml: string): Record<string, unknown>[] {
 
 export async function exportAndCreate(
   thoughtId: string,
-  isCanvasExport: boolean = false,
+  isMemorandumExport: boolean = false,
   existingEntryId?: string
 ): Promise<void> {
-  const { xml, entryIds, promptIds } = await buildXML(thoughtId, isCanvasExport);
+  const { xml, entryIds, promptIds } = await buildXML(thoughtId, isMemorandumExport);
 
-  // Prepend <canvas> if needed
-  const finalXml = isCanvasExport ? `<canvas>\n\n${xml}` : xml;
+  // Prepend <memorandum> if needed
+  const finalXml = isMemorandumExport ? `<memorandum>\n\n${xml}` : xml;
 
   let pageId = existingEntryId;
   if (pageId) {
     await updateExistingEntryProperties({
       entryId: pageId,
       projectId: thoughtId,
-      pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
+      pageType: isMemorandumExport ? "MEMO EXPO" : "CHAT EXPO",
       entriesReferencedIds: entryIds,
       systemPromptsUsedIds: promptIds,
     });
@@ -509,7 +508,7 @@ export async function exportAndCreate(
     // Create the Export entry page
     const res = await createEntry({
       thoughtId,
-      pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
+      pageType: isMemorandumExport ? "MEMO EXPO" : "CHAT EXPO",
       entriesReferencedIds: entryIds,
       systemPromptsUsedIds: promptIds,
     });
