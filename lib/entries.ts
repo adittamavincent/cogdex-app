@@ -969,7 +969,7 @@ function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<s
   let remaining = text;
   if (!remaining) return [];
 
-  const regex = /(\*\*(.*?)\*\*)|(\*(.*?)\*)|(~~(.*?)~~)|(`([^`]+)`)|(?:\[(.*?)\]\((.*?)\))/g;
+  const regex = /(\*\*(.*?)\*\*)|(?<!\w)(_([^_]+)_(?!\w))|(\*(.*?)\*)|(~~(.*?)~~)|(`([^`]+)`)|(?:\[(.*?)\]\((.*?)\))/g;
   let lastIndex = 0;
   let match;
 
@@ -980,14 +980,16 @@ function splitTextIntoRichText(text: string, isAdded: boolean = false): Record<s
 
     if (match[1] !== undefined) {
       tokens.push({ text: match[2], type: "bold" });
-    } else if (match[3] !== undefined) {
-      tokens.push({ text: match[4], type: "italic" });
     } else if (match[5] !== undefined) {
-      tokens.push({ text: match[6], type: "strikethrough" });
+      tokens.push({ text: match[6], type: "italic" });
     } else if (match[7] !== undefined) {
-      tokens.push({ text: match[8], type: "code" });
-    } else if (match[9] !== undefined && match[10] !== undefined) {
-      tokens.push({ text: match[9], url: match[10], type: "link" });
+      tokens.push({ text: match[8], type: "italic" });
+    } else if (match[9] !== undefined) {
+      tokens.push({ text: match[10], type: "strikethrough" });
+    } else if (match[11] !== undefined) {
+      tokens.push({ text: match[12], type: "code" });
+    } else if (match[13] !== undefined && match[14] !== undefined) {
+      tokens.push({ text: match[13], url: match[14], type: "link" });
     } else {
       tokens.push({ text: match[0], type: "text" });
     }
@@ -1738,6 +1740,29 @@ function getRichTextPlain(rt: any[]): string {
   return rt?.map((t: any) => t.plain_text ?? t.text?.content ?? "").join("") ?? "";
 }
 
+function getRichTextMarkdown(rt: any[]): string {
+  return rt?.map((t: any) => {
+    let text = t.plain_text ?? t.text?.content ?? "";
+    if (!text) return "";
+
+    const annotations = t.annotations || {};
+    if (annotations.code) {
+      text = `\`${text}\``;
+    } else {
+      if (annotations.bold) text = `**${text}**`;
+      if (annotations.italic) text = `_${text}_`;
+      if (annotations.strikethrough) text = `~~${text}~~`;
+    }
+
+    const url = t.href ?? t.text?.link?.url;
+    if (url) {
+      text = `[${text}](${url})`;
+    }
+
+    return text;
+  }).join("") ?? "";
+}
+
 function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>): string {
   const type = block.type;
   const data = block[type];
@@ -1745,40 +1770,40 @@ function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>
 
   switch (type) {
     case "heading_1":
-      return `# ${getRichTextPlain(data.rich_text)}`;
+      return `# ${getRichTextMarkdown(data.rich_text)}`;
     case "heading_2":
-      return `## ${getRichTextPlain(data.rich_text)}`;
+      return `## ${getRichTextMarkdown(data.rich_text)}`;
     case "heading_3":
-      return `### ${getRichTextPlain(data.rich_text)}`;
+      return `### ${getRichTextMarkdown(data.rich_text)}`;
     case "heading_4":
-      return `#### ${getRichTextPlain(data.rich_text)}`;
+      return `#### ${getRichTextMarkdown(data.rich_text)}`;
     case "heading_5":
-      return `##### ${getRichTextPlain(data.rich_text)}`;
+      return `##### ${getRichTextMarkdown(data.rich_text)}`;
     case "heading_6":
-      return `###### ${getRichTextPlain(data.rich_text)}`;
+      return `###### ${getRichTextMarkdown(data.rich_text)}`;
     case "bulleted_list_item":
-      return `- ${getRichTextPlain(data.rich_text)}`;
+      return `- ${getRichTextMarkdown(data.rich_text)}`;
     case "numbered_list_item":
-      return `1. ${getRichTextPlain(data.rich_text)}`;
+      return `1. ${getRichTextMarkdown(data.rich_text)}`;
     case "quote":
-      return `> ${getRichTextPlain(data.rich_text)}`;
+      return `> ${getRichTextMarkdown(data.rich_text)}`;
     case "callout":
-      return getRichTextPlain(data.rich_text);
+      return getRichTextMarkdown(data.rich_text);
     case "to_do":
-      return `- [${data.checked ? "x" : " "}] ${getRichTextPlain(data.rich_text)}`;
+      return `- [${data.checked ? "x" : " "}] ${getRichTextMarkdown(data.rich_text)}`;
     case "toggle":
-      return getRichTextPlain(data.rich_text);
+      return getRichTextMarkdown(data.rich_text);
     case "divider":
       return `---`;
     case "paragraph":
-      return getRichTextPlain(data.rich_text);
+      return getRichTextMarkdown(data.rich_text);
     case "code":
       return `\`\`\`\n${getRichTextPlain(data.rich_text)}\n\`\`\``;
     case "table": {
       const rows = childBlocksMap.get(block.id) || data.children || [];
       const rowStrings = rows.map((row: any) => {
         const cells = row.table_row?.cells || [];
-        const cellStrings = cells.map((cell: any) => getRichTextPlain(cell));
+        const cellStrings = cells.map((cell: any) => getRichTextMarkdown(cell));
         return `| ${cellStrings.join(" | ")} |`;
       });
       if (rowStrings.length === 0) return "";
@@ -2010,10 +2035,16 @@ export async function updatePageBlocks(
   }
 
   const similarityRatio = matchCount / Math.max(oldSerialized.length, newSerialized.length, 1);
+  const hasTableStructuralChange = diff.some((step) => {
+    if (step.action === "keep") return false;
+    const oldType = step.oldIdx !== undefined ? oldSerialized[step.oldIdx]?.type : undefined;
+    const newType = step.newIdx !== undefined ? newSerialized[step.newIdx]?.type : undefined;
+    return oldType === "table" || newType === "table";
+  });
   const isCompletelyDifferent = similarityRatio < 0.3;
   
-  if (forceWipe || (isCompletelyDifferent && oldSerialized.length > 0)) {
-    debug(`Similarity ratio is ${similarityRatio.toFixed(2)}. Wiping and replacing blocks.`);
+  if (forceWipe || hasTableStructuralChange || (isCompletelyDifferent && oldSerialized.length > 0)) {
+    debug(`Wiping and replacing blocks. similarity=${similarityRatio.toFixed(2)}, forceWipe=${forceWipe}, tableStructuralChange=${hasTableStructuralChange}`);
     
     let manualWipeNeeded = true;
     if (!keepFirstBlock) {

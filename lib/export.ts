@@ -16,6 +16,17 @@ interface NotionBlock {
 interface NotionRichText {
   type?: string;
   plain_text?: string;
+  href?: string;
+  annotations?: {
+    bold?: boolean;
+    italic?: boolean;
+    strikethrough?: boolean;
+    code?: boolean;
+  };
+  text?: {
+    content?: string;
+    link?: { url?: string } | null;
+  };
   mention?: {
     type?: string;
     page?: { id: string };
@@ -51,6 +62,47 @@ interface NotionPage {
   }>;
 }
 
+function richTextToMarkdown(richText: NotionRichText[]): string {
+  return richText.map((t) => {
+    if (t.type === "mention" && t.mention?.type === "page" && t.mention.page?.id) {
+      const plainText = t.plain_text ?? "";
+      const tAttr = plainText.replace(/"/g, '&quot;');
+      return `<mention title="${tAttr}" />`;
+    }
+
+    let text = t.plain_text ?? t.text?.content ?? "";
+    if (!text) return "";
+
+    const annotations = t.annotations || {};
+    if (annotations.code) {
+      text = `\`${text}\``;
+    } else {
+      if (annotations.bold) text = `**${text}**`;
+      if (annotations.italic) text = `_${text}_`;
+      if (annotations.strikethrough) text = `~~${text}~~`;
+    }
+
+    const url = t.href ?? t.text?.link?.url;
+    if (url) {
+      text = `[${text}](${url})`;
+    }
+
+    return text;
+  }).join("");
+}
+
+function richTextToPlainText(richText: NotionRichText[]): string {
+  return richText.map((t) => {
+    if (t.type === "mention" && t.mention?.type === "page" && t.mention.page?.id) {
+      const plainText = t.plain_text ?? "";
+      const tAttr = plainText.replace(/"/g, '&quot;');
+      return `<mention title="${tAttr}" />`;
+    }
+
+    return t.plain_text ?? t.text?.content ?? "";
+  }).join("");
+}
+
 
 
 // Read all text content from a Notion page (recursive blocks → plain text)
@@ -77,17 +129,7 @@ export async function readPageContent(pageId: string): Promise<string> {
     if (!data) continue;
 
     const richText = data.rich_text ?? [];
-    let text = "";
-    
-    for (const t of richText) {
-      if (t.type === "mention" && t.mention?.type === "page" && t.mention.page?.id) {
-        const plainText = t.plain_text ?? "";
-        const tAttr = plainText.replace(/"/g, '&quot;');
-        text += `<mention title="${tAttr}" />`;
-      } else {
-        text += t.plain_text ?? "";
-      }
-    }
+    const text = type === "code" ? richTextToPlainText(richText) : richTextToMarkdown(richText);
 
     if (type === "heading_1") lines.push(`# ${text}`);
     else if (type === "heading_2") lines.push(`## ${text}`);
@@ -124,7 +166,7 @@ export async function readPageContent(pageId: string): Promise<string> {
       const rowStrings = tableRows.map((rowBlock) => {
         const cells = rowBlock.table_row?.cells || [];
         const cellStrings = cells.map((cell) => {
-          return cell.map((t) => t.plain_text).join("");
+          return richTextToMarkdown(cell);
         });
         return `| ${cellStrings.join(" | ")} |`;
       });
