@@ -829,10 +829,13 @@ export function matchLinesRelaxed(
 }
 
 export function applyPatch(baseText: string, patchText: string): Array<{ text: string, type: "normal" | "added" }> {
+  debug(`[applyPatch] Starting patch application on baseText length ${baseText.length}`);
   const hunks = parseDiff(patchText);
+  debug(`[applyPatch] Parsed ${hunks.length} hunks from patchText`);
   let workingText = baseText;
   const baseLines: Array<{ text: string, type: "normal" | "added" }> = workingText.split(/\r?\n/).map(t => ({ text: t, type: "normal" as const }));
   if (hunks.length === 0) {
+    debug(`[applyPatch] No hunks found, returning baseLines`);
     return baseLines;
   }
 
@@ -1031,6 +1034,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         }
         baseLines.splice(foundIndex, matchedLength, ...replaceLines);
       }
+      debug(`[applyPatch] Successfully applied hunk starting at old line ${hunk.oldStart}. Patched index: ${foundIndex}`);
     } else {
       if (workingText.trim() === "") {
         const replaceLines: { text: string, type: "normal" | "added" }[] = [];
@@ -1041,7 +1045,7 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         }
         return replaceLines;
       }
-      warn(`Could not apply hunk starting at line ${hunk.oldStart}`);
+      warn(`[applyPatch] Could not apply hunk starting at line ${hunk.oldStart} (no match found!)`);
     }
   }
 
@@ -1798,13 +1802,19 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
       if (match) {
         currentContent = match[1].trim();
+        debug(`[handleMemoUpdate] Extracted MEMO EXPO content. Length: ${currentContent.length}`);
+      } else {
+        warn(`[handleMemoUpdate] Could not match <entry type="MEMO"> in MEMO EXPO entry.`);
       }
     } else {
       const unwrapped = unwrapCodeFences(content);
       if (isDiff(unwrapped)) {
+        debug(`[handleMemoUpdate] Applying diff from MEMO RESP. Unwrapped length: ${unwrapped.length}`);
         const patchedLines = applyPatch(currentContent, unwrapped);
         currentContent = patchedLines.map(l => l.text).join("\n");
+        debug(`[handleMemoUpdate] Finished applying patch. New content length: ${currentContent.length}`);
       } else {
+        debug(`[handleMemoUpdate] Not a diff. Replacing content entirely.`);
         currentContent = unwrapped;
       }
     }
@@ -2115,6 +2125,7 @@ export async function updatePageBlocks(
 
   let newBlocks = markdownToRichNotionBlocks(newMarkdown);
   newBlocks = newBlocks.map(b => cleanBlock(b));
+  debug(`[updatePageBlocks] Converted markdown to ${newBlocks.length} Notion blocks.`);
 
   const oldSerialized = oldBlocksToSync.map(b => ({
     id: b.id,
