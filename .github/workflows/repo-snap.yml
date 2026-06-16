@@ -1,0 +1,35 @@
+name: Repo Snap
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  repo-snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Repomix
+        env:
+          COGDEX_REPO_URL: ${{ secrets.COGDEX_REPO_URL }}
+        run: |
+          npx repomix --compress --remote $COGDEX_REPO_URL
+
+      - name: Trigger Webhook
+        env:
+          COGDEX_WEBHOOK_SECRET: ${{ secrets.COGDEX_WEBHOOK_SECRET }}
+          COGDEX_DEFAULT_PROJECT_ID: ${{ secrets.COGDEX_DEFAULT_PROJECT_ID }}
+        run: |
+          curl -X POST https://cogdex-app.vercel.app/api/cogdex/webhook \
+            -H "Content-Type: application/json" \
+            -H "x-cogdex-secret: $COGDEX_WEBHOOK_SECRET" \
+            -H "x-cogdex-page-type: REPO SNAP" \
+            -d "{\"source\": {\"type\": \"github_actions\"}, \"data\": {\"object\": \"page\", \"id\": \"$COGDEX_DEFAULT_PROJECT_ID\"}}"

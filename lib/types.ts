@@ -1,12 +1,13 @@
 export type PageType =
-  | "REG USR"
-  | "REG RES"
-  | "CNV EXP"
-  | "CNV RES"
-  | "REG EXP"
-  | "REG USR CMT"
-  | "Relink Databases"
-  | "CNV UPD";
+  | "CHAT USER"
+  | "CHAT RESP"
+  | "MEMO EXPO"
+  | "MEMO RESP"
+  | "CHAT EXPO"
+  | "CHAT CMNT"
+  | "SYST LINK"
+  | "MEMO UPDT"
+  | "REPO SNAP";
 
 // Notion automation webhook — actual payload shape sent by Notion
 // body.data.id is the page ID of the Thought Management row that triggered the button

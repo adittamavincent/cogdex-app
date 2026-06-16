@@ -118,9 +118,10 @@ async function getIncludedEntries(thoughtId: string) {
       and: [
         { property: "Project", relation: { contains: thoughtId } },
         { property: "Include", checkbox: { equals: true } },
-        { property: "Type", select: { does_not_equal: "REG EXP" } },
-        { property: "Type", select: { does_not_equal: "CNV EXP" } },
-        { property: "Type", select: { does_not_equal: "CNV RES" } },
+        { property: "Type", select: { does_not_equal: "CHAT EXPO" } },
+        { property: "Type", select: { does_not_equal: "MEMO EXPO" } },
+        { property: "Type", select: { does_not_equal: "MEMO RESP" } },
+        { property: "Type", select: { does_not_equal: "REPO SNAP" } },
       ],
     },
   });
@@ -179,7 +180,7 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 
 ## Context & Chronology Rules
 1. Process \`<protocol>\` first, then \`<context>\` entries in chronological order.
-2. The last \`<entry type="REG USR">\` is the current goal.
+2. The last \`<entry type="CHAT USER">\` is the current goal.
 3. Earlier entries are immutable history. Do not recreate them.
 4. If context is incomplete/ambiguous, state the gap explicitly.
 `;
@@ -243,7 +244,7 @@ Do NOT include: conversation history, reasoning, drafts, or TODO lists.
     }
   } else {
     return `${commonHeader}
-## Default Output: Response Entry (REG RES)
+## Default Output: Response Entry (CHAT RESP)
 Produce a regular response entry answering the user's intent.
 
 ### Strictly Paste-Ready Output Contract
@@ -253,7 +254,7 @@ Produce a regular response entry answering the user's intent.
 
 ### Tone & Language
 - **Style**: Senior peer explaining to a colleague. Direct, structured, practical.
-- **Language**: Match the language of the latest \`REG USR\` entry exactly.
+- **Language**: Match the language of the latest \`CHAT USER\` entry exactly.
 `;
   }
 }
@@ -283,7 +284,7 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
 
   const canvasEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
     const type = entry.properties?.Type?.select?.name;
-    return type === "CNV RES" || type === "CNV EXP";
+    return type === "MEMO RESP" || type === "MEMO EXPO";
   });
 
   if (canvasEntries.length === 0) {
@@ -308,8 +309,8 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
     const type = entry.properties?.Type?.select?.name;
     const content = await readPageContent(entry.id);
 
-    if (type === "CNV EXP") {
-      const match = content.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
+    if (type === "MEMO EXPO") {
+      const match = content.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
@@ -329,12 +330,32 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
   return null;
 }
 
+async function getLatestRepoSnap(thoughtId: string): Promise<string | null> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: thoughtId } },
+        { property: "Type", select: { equals: "REPO SNAP" } },
+        { property: "Include", checkbox: { equals: true } }
+      ]
+    },
+    sorts: [{ timestamp: "created_time", direction: "descending" }],
+    page_size: 1
+  });
+  if (response.results.length === 0) return null;
+  const pageId = (response.results[0] as NotionPage).id;
+  return await readPageContent(pageId);
+}
+
 // Build the full XML context string and return the involved entry/prompt IDs
 async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
-  const [entries, prompts, latestCanvas] = await Promise.all([
+  const [entries, prompts, latestCanvas, latestRepoSnap] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
     getLatestCanvas(thoughtId),
+    getLatestRepoSnap(thoughtId),
   ]);
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
@@ -348,7 +369,7 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  const hasCanvas = (latestCanvas !== null) || (canvasContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "CNV RES");
+  const hasCanvas = (latestCanvas !== null) || (canvasContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "MEMO RESP");
   lines.push(getDefaultProtocol(isCanvasExport, hasCanvas));
   if (promptContents.length > 0) {
     lines.push("");
@@ -378,6 +399,13 @@ async function buildXML(thoughtId: string, isCanvasExport: boolean = false): Pro
     lines.push(`  </entry>`);
   }
   lines.push("</context>");
+
+  if (latestRepoSnap) {
+    lines.push("");
+    lines.push("<codebase>");
+    lines.push(latestRepoSnap);
+    lines.push("</codebase>");
+  }
 
   lines.push("");
   lines.push("</cogdex>");
@@ -456,7 +484,7 @@ export async function exportAndCreate(thoughtId: string, isCanvasExport: boolean
   // Create the Export entry page
   const { pageId } = await createEntry({
     thoughtId,
-    pageType: isCanvasExport ? "CNV EXP" : "REG EXP",
+    pageType: isCanvasExport ? "MEMO EXPO" : "CHAT EXPO",
     entriesReferencedIds: entryIds,
     systemPromptsUsedIds: promptIds,
   });

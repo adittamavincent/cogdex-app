@@ -53,14 +53,15 @@ const EMOJIS = [
 
 // Page body templates per Type
 const TEMPLATES: Record<PageType, string> = {
-  "REG USR": "",
-  "REG RES": "",
-  "CNV EXP": "",
-  "CNV RES": "",
-  "REG EXP": "",
-  "REG USR CMT": "",
-  "Relink Databases": "",
-  "CNV UPD": "",
+  "CHAT USER": "",
+  "CHAT RESP": "",
+  "MEMO EXPO": "",
+  "MEMO RESP": "",
+  "CHAT EXPO": "",
+  "CHAT CMNT": "",
+  "SYST LINK": "",
+  "MEMO UPDT": "",
+  "REPO SNAP": "",
 };
 
 function findProperty(properties: Record<string, any>, name: string): any {
@@ -78,7 +79,7 @@ export async function createEntry(params: {
   systemPromptsUsedIds?: string[];
 }): Promise<{ pageId?: string; ignored?: boolean }> {
   const { thoughtId, pageType } = params;
-  const isExport = pageType === "REG EXP";
+  const isExport = pageType === "CHAT EXPO";
 
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
@@ -104,7 +105,7 @@ export async function createEntry(params: {
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: String(nextNumber) } }] },
     Type: { select: { name: pageType } },
-    Include: { checkbox: pageType !== "REG EXP" && pageType !== "CNV EXP" && pageType !== "CNV RES" },
+    Include: { checkbox: pageType !== "CHAT EXPO" && pageType !== "MEMO EXPO" && pageType !== "MEMO RESP" && pageType !== "REPO SNAP" },
     Project: { relation: [{ id: thoughtId }] },
   };
 
@@ -120,7 +121,7 @@ export async function createEntry(params: {
     };
   }
 
-  const blocksToAppend = (!isExport && pageType !== "CNV EXP") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [];
+  const blocksToAppend = (!isExport && pageType !== "MEMO EXPO") ? markdownToNotionBlocks(TEMPLATES[pageType]) : [];
 
   const createPayload: any = {
     parent: { data_source_id: entryDbId },
@@ -991,7 +992,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
     const canvasEntries = canvasPagesResponse.results.filter((entry: any) => {
       const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-      return type === "CNV RES" || type === "CNV EXP";
+      return type === "MEMO RESP" || type === "MEMO EXPO";
     });
 
     if (canvasEntries.length === 0) {
@@ -1022,7 +1023,7 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
 
   const results = canvasPagesResponse.results.filter((entry: any) => {
     const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-    return type === "CNV RES" || type === "CNV EXP";
+    return type === "MEMO RESP" || type === "MEMO EXPO";
   });
 
   const currentIdx = results.findIndex(r => r.id === canvasEntryId);
@@ -1038,8 +1039,8 @@ export async function handleCanvasUpdate(triggeredId: string): Promise<void> {
     const prevType = findProperty((prevEntry as any)?.properties || {}, "Type")?.select?.name;
     const rawBase = await readPageContent(previousCanvasId);
 
-    if (prevType === "CNV EXP") {
-      const match = rawBase.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
+    if (prevType === "MEMO EXPO") {
+      const match = rawBase.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
       baseContent = match ? match[1].trim() : "";
     } else {
       baseContent = unwrapCodeFences(rawBase);
@@ -1198,7 +1199,7 @@ export async function handleUserComment(triggeredId: string) {
 
     const createResult = await createEntry({
       thoughtId: projectId,
-      pageType: "REG USR CMT",
+      pageType: "CHAT CMNT",
     });
 
     if (createResult.pageId) {
@@ -1371,7 +1372,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
   const canvasDbIdResolved = await resolveDataSourceId(CANVAS_DB_ID);
 
-  // 1. Gather all entries of type "CNV RES" and "CNV EXP" for the project
+  // 1. Gather all entries of type "MEMO RESP" and "MEMO EXPO" for the project
   const entriesResponse = await notion.dataSources.query({
     data_source_id: entryDbId,
     filter: {
@@ -1382,7 +1383,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
 
   const canvasEntries = entriesResponse.results.filter((entry: any) => {
     const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-    return type === "CNV RES" || type === "CNV EXP";
+    return type === "MEMO RESP" || type === "MEMO EXPO";
   });
 
   // Sort them chronologically by their Name (converted to integer or alphanumerically)
@@ -1415,8 +1416,8 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     const type = findProperty((entry as any).properties || {}, "Type")?.select?.name;
     const content = await readPageContent(entry.id);
 
-    if (type === "CNV EXP") {
-      const match = content.match(/<entry\s+type="CNV(?: EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
+    if (type === "MEMO EXPO") {
+      const match = content.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
@@ -1904,6 +1905,32 @@ export async function updatePageBlocks(
     } catch (err) {
       warn(`Failed to delete block ${op.id}:`, err);
     }
+  }
+}
+
+export async function setExclusiveInclude(projectId: string, entryType: string, activePageId: string): Promise<void> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: projectId } },
+        { property: "Type", select: { equals: entryType } }
+      ]
+    }
+  });
+  
+  const entries = response.results as unknown as NotionPage[];
+  
+  for (const entry of entries) {
+    const isTarget = entry.id === activePageId;
+    await notion.pages.update({
+      page_id: entry.id,
+      properties: {
+        Include: { checkbox: isTarget }
+      }
+    });
   }
 }
 
