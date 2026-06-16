@@ -824,8 +824,8 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
 
     const headingMatch = line.text.match(/^(#{1,6})\s+(.*)$/);
     if (headingMatch) {
-      const level = Math.min(headingMatch[1].length, 3);
-      const type = `heading_${level}` as "heading_1" | "heading_2" | "heading_3";
+      const level = Math.min(headingMatch[1].length, 6);
+      const type = `heading_${level}` as "heading_1" | "heading_2" | "heading_3" | "heading_4" | "heading_5" | "heading_6";
       blocks.push({
         object: "block",
         type,
@@ -1446,7 +1446,7 @@ export async function handleCNVUPD(thoughtId: string): Promise<void> {
     if (results.length > 1) {
       debug(`Archiving ${results.length - 1} duplicate canvas pages`);
       await Promise.all(
-        results.slice(1).map(r => notion.pages.update({ page_id: r.id, archived: true }))
+        results.slice(1).map(r => notion.pages.update({ page_id: r.id, in_trash: true }))
       );
     }
   } else {
@@ -1495,12 +1495,24 @@ function serializeBlockToMarkdown(block: any, childBlocksMap: Map<string, any[]>
       return `## ${getRichTextPlain(data.rich_text)}`;
     case "heading_3":
       return `### ${getRichTextPlain(data.rich_text)}`;
+    case "heading_4":
+      return `#### ${getRichTextPlain(data.rich_text)}`;
+    case "heading_5":
+      return `##### ${getRichTextPlain(data.rich_text)}`;
+    case "heading_6":
+      return `###### ${getRichTextPlain(data.rich_text)}`;
     case "bulleted_list_item":
       return `- ${getRichTextPlain(data.rich_text)}`;
     case "numbered_list_item":
       return `1. ${getRichTextPlain(data.rich_text)}`;
     case "quote":
       return `> ${getRichTextPlain(data.rich_text)}`;
+    case "callout":
+      return getRichTextPlain(data.rich_text);
+    case "to_do":
+      return `- [${data.checked ? "x" : " "}] ${getRichTextPlain(data.rich_text)}`;
+    case "toggle":
+      return getRichTextPlain(data.rich_text);
     case "divider":
       return `---`;
     case "paragraph":
@@ -1603,20 +1615,55 @@ async function fetchBlocksRecursive(blockId: string): Promise<any[]> {
   return blocks;
 }
 
+const SYNCABLE_TYPES = new Set([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "heading_4",
+  "heading_5",
+  "heading_6",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "quote",
+  "callout",
+  "code",
+  "to_do",
+  "toggle",
+  "divider",
+  "table"
+]);
+
+const TEXT_BLOCK_TYPES = new Set([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "heading_4",
+  "heading_5",
+  "heading_6",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "quote",
+  "callout",
+  "code",
+  "to_do",
+  "toggle"
+]);
+
 function flattenBlocks(
   blocks: any[],
   parentId: string,
   childBlocksMap: Map<string, any[]>
 ): any[] {
   const flat: any[] = [];
-  const ignoredTypes = new Set(["column_list", "column", "image"]);
 
   for (const block of blocks) {
     if (block.children && block.children.length > 0) {
       childBlocksMap.set(block.id, block.children);
     }
 
-    if (!ignoredTypes.has(block.type)) {
+    if (SYNCABLE_TYPES.has(block.type)) {
       flat.push({
         id: block.id,
         type: block.type,
@@ -1639,8 +1686,8 @@ export async function updatePageBlocks(
   keepFirstBlock: boolean = false,
   forceWipe: boolean = false
 ): Promise<void> {
+  forceWipe = false; // Preserve templates/layouts/styling by avoiding destructive full wipes
   if (forceWipe) {
-    debug(`forceWipe is true for ${pageId}, performing full clean & insert`);
     let hasMore = true;
     let startCursor: string | undefined = undefined;
     let isFirstPage = true;
@@ -1704,7 +1751,7 @@ export async function updatePageBlocks(
   }));
 
   const newSerialized = newBlocks.map(b => ({
-    type: b.type,
+    type: b.type as string,
     md: serializeBlockToMarkdown(b, new Map()),
     raw: b,
   }));
@@ -1725,12 +1772,10 @@ export async function updatePageBlocks(
       const oldBlock = oldSerialized[current.oldIdx!];
       const newBlock = newSerialized[next.newIdx!];
 
-      const updatableTypes = new Set([
-        "paragraph", "heading_1", "heading_2", "heading_3", "heading_4", "heading_5", "heading_6",
-        "bulleted_list_item", "numbered_list_item", "quote", "callout", "code"
-      ]);
-
-      if (oldBlock.type === newBlock.type && updatableTypes.has(oldBlock.type)) {
+      if (
+        TEXT_BLOCK_TYPES.has(oldBlock.type) &&
+        TEXT_BLOCK_TYPES.has(newBlock.type)
+      ) {
         processedSteps.push({
           action: "update",
           oldIdx: current.oldIdx,
@@ -1836,10 +1881,13 @@ export async function updatePageBlocks(
     try {
       const blockType = op.newBlock.type;
       const updateData: any = {
-        rich_text: op.newBlock[blockType].rich_text
+        rich_text: op.newBlock[blockType]?.rich_text || []
       };
-      if (blockType === "code") {
-        updateData.language = op.newBlock.code.language;
+      if (op.oldType === "code") {
+        updateData.language = op.newBlock.code?.language || "plain text";
+      }
+      if (op.oldType === "to_do") {
+        updateData.checked = op.newBlock.to_do?.checked ?? false;
       }
       await notion.blocks.update({
         block_id: op.id,
