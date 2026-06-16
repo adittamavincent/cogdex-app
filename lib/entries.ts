@@ -593,10 +593,7 @@ export function normalizeText(text: string): string {
   return text
     .trim()
     .toLowerCase()
-    .replace(/^#{1,6}\s+/, "")  // strip heading markers (## Repository → repository)
-    .replace(/[*_~`]/g, "")    // remove bold, italic, strikethrough, inline code
-    .replace(/^[-*+]\s+/, "")   // remove bullet markers
-    .replace(/^\d+\.\s+/, "")   // remove numbered list prefix
+    .replace(/[*_~`]/g, "")    // remove bold, italic, strikethrough, inline code (keep headings, list bullets, table pipes)
     .replace(/\s+/g, " ");      // collapse spaces
 }
 
@@ -885,6 +882,9 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
 
       // Find matching table block
       let matchedTable: StructuralBlock | null = null;
+      let bestMatchScore = -1;
+      let closestDistance = Infinity;
+
       for (const tb of tableBlocks) {
         const tbLines = tb.content.split("\n");
         const tbCellLines = tbLines.filter(l => {
@@ -905,9 +905,15 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
             }
           }
         }
-        if (matchCount >= Math.ceil(ctxCells.length * 0.5)) {
-          matchedTable = tb;
-          break;
+        
+        const minRequiredMatch = Math.ceil(ctxCells.length * 0.5);
+        if (matchCount >= minRequiredMatch) {
+          const distance = Math.abs(tb.startLine - (hunk.oldStart - 1));
+          if (matchCount > bestMatchScore || (matchCount === bestMatchScore && distance < closestDistance)) {
+            bestMatchScore = matchCount;
+            closestDistance = distance;
+            matchedTable = tb;
+          }
         }
       }
 
@@ -952,6 +958,16 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
         const newTableLinesArr = newTableContent.split("\n").filter(l => l.trim());
 
         const result = [...beforeLines, ...newTableLinesArr, ...afterLines];
+        
+        // Adjust the coordinates of all remaining hunks whose target was shifted
+        const lineDelta = result.length - baseLinesArr.length;
+        const currentHunkIdx = sortedHunks.indexOf(hunk);
+        for (let idx = currentHunkIdx + 1; idx < sortedHunks.length; idx++) {
+          if (sortedHunks[idx].oldStart > matchedTable.startLine) {
+            sortedHunks[idx].oldStart += lineDelta;
+          }
+        }
+
         // Update workingText for subsequent hunks (line numbers shift)
         workingText = result.join("\n");
         baseLines.length = 0;
@@ -1059,6 +1075,32 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
           if (currentFlat === searchFlat) {
             foundIndex = start;
             matchedLength = end - start;
+
+            // Build a fallback mapping for the matched range
+            const fallbackMapping = new Array(searchLines.length).fill(-1);
+            const fallbackMappingCounts = new Array(searchLines.length).fill(0);
+            let baseIdx = foundIndex;
+            for (let s = 0; s < searchLines.length; s++) {
+              const sLine = searchLines[s].trim();
+              if (sLine === "") continue;
+
+              let foundB = -1;
+              for (let b = baseIdx; b < foundIndex + matchedLength; b++) {
+                const bLine = baseLines[b].text.trim();
+                if (normalizeText(bLine) === normalizeText(sLine) || superNormalize(bLine) === superNormalize(sLine)) {
+                  foundB = b;
+                  break;
+                }
+              }
+
+              if (foundB !== -1) {
+                fallbackMapping[s] = foundB;
+                fallbackMappingCounts[s] = 1;
+                baseIdx = foundB + 1;
+              }
+            }
+            foundMapping = fallbackMapping;
+            foundMappingCounts = fallbackMappingCounts;
             break;
           }
         }
@@ -1284,7 +1326,7 @@ function buildTableBlock(lines: Array<{ text: string, type: "normal" | "added" }
   let dataRows = rows;
   
   if (rows.length >= 2) {
-    const isSeparator = rows[1].cells.every(c => c.replace(/-/g, "").trim() === "");
+    const isSeparator = rows[1].cells.every(c => c.replace(/[:-]/g, "").trim() === "");
     if (isSeparator) {
       hasHeader = true;
       dataRows = [rows[0], ...rows.slice(2)];
