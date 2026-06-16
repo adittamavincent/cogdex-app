@@ -111,10 +111,19 @@ export async function createEntry(params: {
 
   const nextNumber = await getNextEntryNumber(thoughtId);
 
+  const excludedFromInclude = new Set([
+    "CHAT EXPO", "REG EXP",
+    "MEMO EXPO", "CNV EXP",
+    "MEMO RESP", "CNV RES",
+    "REPO SNAP",
+    "MEMO UPDT", "CNV UPD",
+    "SYST LINK", "Relink Databases"
+  ]);
+
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: String(nextNumber) } }] },
     Type: { select: { name: pageType } },
-    Include: { checkbox: pageType !== "CHAT EXPO" && pageType !== "MEMO EXPO" && pageType !== "MEMO RESP" && pageType !== "REPO SNAP" },
+    Include: { checkbox: !excludedFromInclude.has(pageType) },
     Project: { relation: [{ id: thoughtId }] },
   };
 
@@ -159,9 +168,18 @@ export async function updateExistingEntryProperties(params: {
   const currentNameProp = findProperty(resolvedPageObj.properties || {}, "Name");
   const currentName = currentNameProp?.title?.[0]?.plain_text ?? "";
 
+  const excludedFromInclude = new Set([
+    "CHAT EXPO", "REG EXP",
+    "MEMO EXPO", "CNV EXP",
+    "MEMO RESP", "CNV RES",
+    "REPO SNAP",
+    "MEMO UPDT", "CNV UPD",
+    "SYST LINK", "Relink Databases"
+  ]);
+
   const properties: Record<string, unknown> = {
     Type: { select: { name: pageType } },
-    Include: { checkbox: pageType !== "CHAT EXPO" && pageType !== "MEMO EXPO" && pageType !== "MEMO RESP" && pageType !== "REPO SNAP" },
+    Include: { checkbox: !excludedFromInclude.has(pageType) },
   };
 
   if (!/^\d+$/.test(currentName.trim())) {

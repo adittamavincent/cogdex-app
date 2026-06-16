@@ -11,23 +11,25 @@ No user-facing frontend. No auth system. No database other than Notion. Single-u
 Buttons in Notion send webhooks to the Cogdex API, configured with a custom header representing the action/page type.
 
 ### Notion Page Types & Acronyms
-- **REG**: Regular
-- **CNV**: Canvas
-- **USR**: User
-- **RES**: Response
-- **EXP**: Export
-- **CMT**: Comment
+- **CHAT**: Regular chat/session
+- **MEMO**: Canvas/file management
+- **USER**: User input
+- **RESP**: Response
+- **EXPO**: Export
+- **CMNT**: Comment
+- **UPDT**: Update
+- **SYST**: System
 
 ### Action Actions
 
 | Webhook Action / Custom Header | Triggered From | Behavior |
 |---|---|---|
-| `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` | **Project Page** | Creates a new entry page in the **Entry** database linked to the project. |
-| `CNV RES` | **Entry Page** | Gathers previous version, applies git diff block patch, appends updated full file code back below diff. |
-| `CNV UPD` | **Project Page** | Gathers all `CNV RES` and `CNV EXP` entries for the project. Applies git diffs sequentially to construct latest file code. Writes updated content to a single Canvas page in the **Canvas** database (archives duplicates). Links project to canvas. |
-| `REG EXP` | **Project Page** (As exporting endpoint) | Gathers `Include=true` Entries + System Prompts + latest Canvas. Exports `<cogdex>` XML block. Writes output to new `REG EXP` page in the **Entry** database. |
-| `REG USR CMT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
-| `Relink Databases` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Canvas database views inside it based on template views, filtered to current Project. |
+| `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` | **Project Page** | Creates a new entry page in the **Entry** database linked to the project. |
+| `MEMO RESP` | **Entry Page** | Gathers previous version, applies git diff block patch, appends updated full file code back below diff. |
+| `MEMO UPDT` | **Project Page** | Gathers all `MEMO RESP` and `MEMO EXPO` entries for the project. Applies git diffs sequentially to construct latest file code. Writes updated content to a single Canvas page in the **Canvas** database (archives duplicates). Links project to canvas. |
+| `CHAT EXPO` | **Project Page** (As exporting endpoint) | Gathers `Include=true` Entries + System Prompts + latest Canvas. Exports `<cogdex>` XML block. Writes output to new `CHAT EXPO` page in the **Entry** database. |
+| `CHAT CMNT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
+| `SYST LINK` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Canvas database views inside it based on template views, filtered to current Project. |
 
 ---
 
@@ -41,8 +43,8 @@ To sync properly with the codebase, configure these four databases in Notion:
 
 ### 2. Entry Database
 - `Name` (Title) — Stores the incremented entry number (e.g. `1`, `2`, `3`).
-- `Type` (Select) — Values: `REG USR`, `REG RES`, `CNV EXP`, `CNV RES`, `REG EXP`, `REG USR CMT`, `CNV UPD`.
-- `Include` (Checkbox) — Set to `true` to include in context exports (automatically unchecked for export entries like `REG EXP` and `CNV EXP`).
+- `Type` (Select) — Values: `CHAT USER`, `CHAT RESP`, `MEMO EXPO`, `MEMO RESP`, `CHAT EXPO`, `CHAT CMNT`, `MEMO UPDT`, `REPO SNAP`.
+- `Include` (Checkbox) — Set to `true` to include in context exports (automatically unchecked for export entries like `CHAT EXPO` and `MEMO EXPO`).
 - `Project` (Relation → Project DB)
 - `Entries Referenced` (Relation → Entry DB)
 - `System Prompt Used` (Relation → System Prompt DB)
@@ -133,7 +135,7 @@ Set the same variables in Vercel.
 | Header | Value | Purpose |
 |---|---|---|
 | `x-cogdex-secret` | your secret | authentication |
-| `x-cogdex-page-type` | `REG USR` / `REG RES` / `CNV EXP` / `CNV RES` / `REG EXP` / `REG USR CMT` / `Relink Databases` / `CNV UPD` | action type |
+| `x-cogdex-page-type` | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` / `SYST LINK` / `MEMO UPDT` / `REPO SNAP` | action type |
 
 **Body:** Notion sends page details automatically:
 ```json

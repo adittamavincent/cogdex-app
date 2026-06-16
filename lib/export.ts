@@ -118,15 +118,25 @@ async function getIncludedEntries(thoughtId: string) {
       and: [
         { property: "Project", relation: { contains: thoughtId } },
         { property: "Include", checkbox: { equals: true } },
-        { property: "Type", select: { does_not_equal: "CHAT EXPO" } },
-        { property: "Type", select: { does_not_equal: "MEMO EXPO" } },
-        { property: "Type", select: { does_not_equal: "MEMO RESP" } },
-        { property: "Type", select: { does_not_equal: "REPO SNAP" } },
       ],
     },
   });
 
-  const entries = response.results as unknown as NotionPage[];
+  const rawEntries = response.results as unknown as NotionPage[];
+  
+  const excludedTypes = new Set([
+    "CHAT EXPO", "REG EXP",
+    "MEMO EXPO", "CNV EXP",
+    "MEMO RESP", "CNV RES",
+    "MEMO UPDT", "CNV UPD",
+    "REPO SNAP",
+    "SYST LINK", "Relink Databases"
+  ]);
+
+  const entries = rawEntries.filter((e) => {
+    const type = e.properties?.Type?.select?.name;
+    return type && !excludedTypes.has(type);
+  });
 
   // Sort alphanumerically by Title/Name
   return entries.sort((a, b) => {
@@ -284,7 +294,8 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
 
   const canvasEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
     const type = entry.properties?.Type?.select?.name;
-    return type === "MEMO RESP" || type === "MEMO EXPO";
+    return type === "MEMO RESP" || type === "MEMO EXPO" || type === "MEMO UPDT" ||
+           type === "CNV RES" || type === "CNV EXP" || type === "CNV UPD";
   });
 
   if (canvasEntries.length === 0) {
@@ -309,8 +320,8 @@ async function getCanvasContent(thoughtId: string, latestCanvasPage: NotionPage 
     const type = entry.properties?.Type?.select?.name;
     const content = await readPageContent(entry.id);
 
-    if (type === "MEMO EXPO") {
-      const match = content.match(/<entry\s+type="MEMO(?: EXPO)?"[^>]*>([\s\S]*?)<\/entry>/);
+    if (type === "MEMO EXPO" || type === "CNV EXP") {
+      const match = content.match(/<entry\s+type="(?:MEMO|CNV)(?: EXPO| EXP)?"[^>]*>([\s\S]*?)<\/entry>/);
       currentContent = match ? match[1].trim() : "";
     } else {
       const unwrapped = unwrapCodeFences(content);
