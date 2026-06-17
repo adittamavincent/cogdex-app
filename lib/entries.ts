@@ -2545,7 +2545,7 @@ function cleanBlockForAppend(block: any): any {
   const content = block[type];
   if (!content) return null;
 
-  const cleanContent = { ...content };
+  const cleanContent = stripNulls({ ...content });
   if (cleanContent.rich_text) {
     cleanContent.rich_text = sanitizeRichText(cleanContent.rich_text);
   }
@@ -2555,6 +2555,24 @@ function cleanBlockForAppend(block: any): any {
     type,
     [type]: cleanContent
   };
+}
+
+function stripNulls(obj: any): any {
+  if (obj === null) return undefined;
+  if (Array.isArray(obj)) {
+    return obj.map(stripNulls);
+  }
+  if (typeof obj === "object") {
+    const clean: Record<string, any> = {};
+    for (const key of Object.keys(obj)) {
+      const val = stripNulls(obj[key]);
+      if (val !== undefined) {
+        clean[key] = val;
+      }
+    }
+    return clean;
+  }
+  return obj;
 }
 
 function extractNotionPageId(url: string): string | null {
