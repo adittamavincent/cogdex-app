@@ -1751,10 +1751,13 @@ export async function handleUserComment(triggeredId: string) {
 }
 
 export async function handleMemoUpdate(thoughtId: string): Promise<void> {
-  debug(`Starting handleMemoUpdate for Project ID: ${thoughtId}`);
+  console.log(`[handleMemoUpdate] Starting. Project ID: ${thoughtId}`);
 
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  console.log(`[handleMemoUpdate] Resolved entryDbId: ${entryDbId}`);
+
   const memorandumDbIdResolved = await resolveDataSourceId(MEMORANDUM_DB_ID);
+  console.log(`[handleMemoUpdate] Resolved memorandumDbIdResolved: ${memorandumDbIdResolved}`);
 
   // 1. Gather all entries of type "MEMO RESP" and "MEMO EXPO" for the project
   const entriesResponse = await notion.dataSources.query({
@@ -1764,11 +1767,13 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       relation: { contains: thoughtId }
     }
   });
+  console.log(`[handleMemoUpdate] Entries query returned ${entriesResponse.results?.length} results`);
 
   const memorandumEntries = entriesResponse.results.filter((entry: any) => {
     const type = findProperty(entry.properties || {}, "Type")?.select?.name;
     return type === "MEMO RESP" || type === "MEMO EXPO";
   });
+  console.log(`[handleMemoUpdate] Filtered to ${memorandumEntries.length} memorandum entries`);
 
   // Sort them chronologically by their Name (converted to integer or alphanumerically)
   memorandumEntries.sort((a: any, b: any) => {
@@ -1793,6 +1798,7 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
   const entryContents = await Promise.all(
     memorandumEntries.map((entry: any) => readPageContent(entry.id))
   );
+  console.log(`[handleMemoUpdate] Read content of all ${memorandumEntries.length} entries`);
 
   for (let i = 0; i < memorandumEntries.length; i++) {
     const entry = memorandumEntries[i];
@@ -1809,40 +1815,43 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       const match = content.match(/<entry\s+type="MEMO"[^>]*>([\s\S]*?)<\/entry>/);
       if (match) {
         currentContent = match[1].trim();
-        debug(`[handleMemoUpdate] Extracted MEMO EXPO content. Length: ${currentContent.length}`);
+        console.log(`[handleMemoUpdate] Extracted MEMO EXPO content. Length: ${currentContent.length}`);
       } else {
         warn(`[handleMemoUpdate] Could not match <entry type="MEMO"> in MEMO EXPO entry.`);
       }
     } else {
       const unwrapped = unwrapCodeFences(content);
       if (isDiff(unwrapped)) {
-        debug(`[handleMemoUpdate] Applying diff from MEMO RESP. Unwrapped length: ${unwrapped.length}`);
+        console.log(`[handleMemoUpdate] Applying diff from MEMO RESP. Unwrapped length: ${unwrapped.length}`);
         const patchedLines = applyPatch(currentContent, unwrapped);
         currentContent = patchedLines.map(l => l.text).join("\n");
-        debug(`[handleMemoUpdate] Finished applying patch. New content length: ${currentContent.length}`);
+        console.log(`[handleMemoUpdate] Finished applying patch. New content length: ${currentContent.length}`);
       } else {
-        debug(`[handleMemoUpdate] Not a diff. Replacing content entirely.`);
+        console.log(`[handleMemoUpdate] Not a diff. Replacing content entirely.`);
         currentContent = unwrapped;
       }
     }
   }
 
   // 3. Find existing memorandum page in Memorandum DB for this project
+  console.log(`[handleMemoUpdate] Querying Memorandum DB: ${memorandumDbIdResolved} for project: ${thoughtId}`);
   const memorandumPagesResponse = await notion.dataSources.query({
     data_source_id: memorandumDbIdResolved,
     filter: {
       property: "Project", relation: { contains: thoughtId }
     }
   });
+  console.log(`[handleMemoUpdate] Memorandum DB query returned ${memorandumPagesResponse.results?.length} results`);
 
   let memorandumPageId = "";
   const results = memorandumPagesResponse.results;
 
   if (results.length > 0) {
     memorandumPageId = results[0].id;
-    debug(`Using existing memorandum page ${memorandumPageId}`);
+    console.log(`[handleMemoUpdate] Using existing memorandum page ${memorandumPageId}`);
 
     // Update title/Name to the chronological number from entries
+    console.log(`[handleMemoUpdate] Updating memorandum page title to: ${latestEntryNumber || "1"}`);
     await notion.pages.update({
       page_id: memorandumPageId,
       properties: {
@@ -1852,13 +1861,13 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
 
     // Enforce "only allow 1 memorandum only" by archiving other duplicate memorandum pages
     if (results.length > 1) {
-      debug(`Archiving ${results.length - 1} duplicate memorandum pages`);
+      console.log(`[handleMemoUpdate] Archiving ${results.length - 1} duplicate memorandum pages`);
       await Promise.all(
         results.slice(1).map(r => notion.pages.update({ page_id: r.id, in_trash: true }))
       );
     }
   } else {
-    debug(`Creating new memorandum page in Memorandum DB`);
+    console.log(`[handleMemoUpdate] Creating new memorandum page in Memorandum DB`);
     const memorandumPage = await notion.pages.create({
       parent: { data_source_id: memorandumDbIdResolved },
       properties: {
@@ -1867,10 +1876,12 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       }
     });
     memorandumPageId = memorandumPage.id;
+    console.log(`[handleMemoUpdate] Created new memorandum page: ${memorandumPageId}`);
   }
 
   // 4. Link Project to Memorandum
   try {
+    console.log(`[handleMemoUpdate] Linking project ${thoughtId} to Memorandum ${memorandumPageId}`);
     await notion.pages.update({
       page_id: thoughtId,
       properties: {
@@ -1878,13 +1889,14 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       }
     });
   } catch (err) {
-    warn(`Failed to link Project to Memorandum:`, err);
+    console.warn(`[handleMemoUpdate] Failed to link Project to Memorandum:`, err);
   }
 
   // 5. Rebuild memorandum page from the fully patched markdown.
   const forceWipe = true;
+  console.log(`[handleMemoUpdate] Rebuilding memorandum page: ${memorandumPageId} with content length: ${currentContent.length}`);
   await updatePageBlocks(memorandumPageId, currentContent, false, forceWipe);
-  debug(`Finished updating memorandum page ${memorandumPageId} with latest content (forceWipe: ${forceWipe})`);
+  console.log(`[handleMemoUpdate] Finished updating memorandum page ${memorandumPageId} with latest content (forceWipe: ${forceWipe})`);
 }
 
 function getRichTextPlain(rt: any[]): string {
