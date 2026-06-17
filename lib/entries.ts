@@ -64,6 +64,7 @@ const TEMPLATES: Record<PageType, string> = {
   "REPO SNAP": "",
   "TASK EXPO": "",
   "TASK RESP": "",
+  "CHAT LINK": "",
 };
 
 export function findProperty(properties: Record<string, any>, name: string): any {
@@ -2392,3 +2393,146 @@ export async function setExclusiveInclude(projectId: string, entryType: string, 
     });
   }
 }
+
+export async function handleChatLink(projectId: string, entryId: string | undefined, pageObj: any) {
+  debug(`Starting handleChatLink for project: ${projectId}, entryId: ${entryId}`);
+
+  if (!entryId) {
+    throw new Error("No entryId provided for handleChatLink");
+  }
+
+  // 1. Find CHAT URL in Project page properties
+  const projectPage = await notion.pages.retrieve({ page_id: projectId }) as any;
+  const chatUrlProp = findProperty(projectPage.properties || {}, "CHAT URL");
+  const chatUrl = chatUrlProp?.url || chatUrlProp?.rich_text?.[0]?.plain_text || "";
+
+  if (!chatUrl) {
+    debug("No CHAT URL found in project page properties.");
+  }
+
+  const propertiesToUpdate: Record<string, any> = {
+    Type: { select: { name: "CHAT LINK" as PageType } },
+  };
+
+  // Try to find if there is a URL field on the entry page, and set it if found
+  const entryPage = await notion.pages.retrieve({ page_id: entryId }) as any;
+  const urlPropKey = findPropertyKey(entryPage.properties || {}, ["Chat URL", "CHAT URL", "URL"]);
+  if (urlPropKey && chatUrl) {
+    const propType = entryPage.properties[urlPropKey].type;
+    if (propType === "url") {
+      propertiesToUpdate[urlPropKey] = { url: chatUrl };
+    } else if (propType === "rich_text") {
+      propertiesToUpdate[urlPropKey] = { rich_text: [{ text: { content: chatUrl } }] };
+    }
+  }
+
+  // 2. Extract target page ID from CHAT URL
+  let targetBlocks: any[] = [];
+  const targetPageId = extractNotionPageId(chatUrl);
+  if (targetPageId) {
+    try {
+      const targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
+      const parent = targetPageObj.parent;
+      const parentId = parent?.database_id || parent?.data_source_id;
+      if (parentId) {
+        const resolvedParentId = await resolveDataSourceId(parentId);
+        const resolvedMemoDbId = await resolveDataSourceId(MEMORANDUM_DB_ID);
+        const resolvedEntryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+
+        if (resolvedParentId === resolvedMemoDbId) {
+          // It's a Memorandum! Link via Memorandum relation
+          const memoPropKey = findPropertyKey(entryPage.properties || {}, ["Memorandum", "Memo"]);
+          if (memoPropKey) {
+            propertiesToUpdate[memoPropKey] = { relation: [{ id: targetPageId }] };
+            debug(`Linked entry to Memorandum page ${targetPageId} via property ${memoPropKey}`);
+          }
+        } else if (resolvedParentId === resolvedEntryDbId) {
+          // It's an Entry! Link via Entries Referenced relation
+          const entryPropKey = findPropertyKey(entryPage.properties || {}, ["Entries Referenced", "Entry", "Related Entry", "Related Back to Entry"]);
+          if (entryPropKey) {
+            propertiesToUpdate[entryPropKey] = { relation: [{ id: targetPageId }] };
+            debug(`Linked entry to Entry page ${targetPageId} via property ${entryPropKey}`);
+          }
+        }
+      }
+
+      // Fetch all blocks from the target page to clone them
+      let targetHasMore = true;
+      let targetStartCursor: string | undefined;
+      while (targetHasMore) {
+        const listResponse = await notion.blocks.children.list({
+          block_id: targetPageId,
+          start_cursor: targetStartCursor,
+        });
+        targetBlocks.push(...listResponse.results);
+        targetHasMore = listResponse.has_more;
+        targetStartCursor = listResponse.next_cursor ?? undefined;
+      }
+    } catch (err) {
+      warn(`Failed to resolve or link target page from CHAT URL ${chatUrl}:`, err);
+    }
+  }
+
+  // 3. Sequential numbering name update
+  const currentNameProp = findProperty(entryPage.properties || {}, "Name");
+  const currentName = currentNameProp?.title?.[0]?.plain_text ?? "";
+  if (!/^\d+$/.test(currentName.trim())) {
+    const nextNumber = await getNextEntryNumber(projectId, entryId);
+    propertiesToUpdate.Name = { title: [{ text: { content: String(nextNumber) } }] };
+  }
+
+  await notion.pages.update({
+    page_id: entryId,
+    properties: propertiesToUpdate,
+  });
+
+  // Append cloned blocks if there are any
+  if (targetBlocks.length > 0) {
+    const blocksToAppend = targetBlocks.map(cleanBlockForAppend);
+    const CHUNK = 100;
+    for (let i = 0; i < blocksToAppend.length; i += CHUNK) {
+      await notion.blocks.children.append({
+        block_id: entryId,
+        children: blocksToAppend.slice(i, i + CHUNK),
+      });
+    }
+    debug(`Copied ${targetBlocks.length} blocks from target page ${targetPageId} to entry ${entryId}`);
+  }
+
+  debug(`Successfully finished handleChatLink for entry ${entryId}`);
+}
+
+function cleanBlockForAppend(block: any): any {
+  const { id, parent, last_edited_time, created_time, last_edited_by, created_by, has_children, archived, ...clean } = block;
+  const type = clean.type;
+  if (type && clean[type]) {
+    const content = { ...clean[type] };
+    if (content.rich_text) {
+      content.rich_text = sanitizeRichText(content.rich_text);
+    }
+    clean[type] = content;
+  }
+  return clean;
+}
+
+function extractNotionPageId(url: string): string | null {
+  if (!url) return null;
+  const cleanUrl = url.split(/[?#]/)[0];
+  const match = cleanUrl.match(/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i) || 
+                cleanUrl.match(/[0-9a-f]{32}/i);
+  if (match) {
+    return match[0].replace(/-/g, "").toLowerCase();
+  }
+  return null;
+}
+
+function findPropertyKey(properties: Record<string, any>, possibilities: string[]): string | undefined {
+  const keys = Object.keys(properties);
+  for (const pos of possibilities) {
+    const target = pos.toLowerCase().replace(/\s+/g, "");
+    const match = keys.find(k => k.toLowerCase().replace(/\s+/g, "") === target);
+    if (match) return match;
+  }
+  return undefined;
+}
+

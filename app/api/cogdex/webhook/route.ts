@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry } from "@/lib/entries";
+import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -24,6 +24,7 @@ const VALID_PAGE_TYPES: PageType[] = [
   "REPO SNAP",
   "TASK EXPO",
   "TASK RESP",
+  "CHAT LINK",
 ];
 
 const CREATABLE_ENTRY_TYPES: PageType[] = [
@@ -36,6 +37,7 @@ const CREATABLE_ENTRY_TYPES: PageType[] = [
   "REPO SNAP",
   "TASK EXPO",
   "TASK RESP",
+  "CHAT LINK",
 ];
 
 
@@ -43,6 +45,7 @@ export async function POST(req: NextRequest) {
   // --- Auth ---
   const incomingSecret =
     req.headers.get(SECRET_HEADER) ||
+    req.headers.get("coged-secret") ||
     req.headers.get("cogdex-secret") ||
     req.headers.get("x-cogdex-secret") ||
     req.headers.get("authorization")?.replace("Bearer ", "");
@@ -120,6 +123,11 @@ export async function POST(req: NextRequest) {
 
   // --- Route to action ---
   try {
+    if (pageType === "CHAT LINK") {
+      await handleChatLink(projectId, entryId, pageObj);
+      return Response.json({ ok: true });
+    }
+
     if (pageType === "CHAT EXPO") {
       await exportAndCreate(projectId, false, entryId);
       return Response.json({ ok: true });
