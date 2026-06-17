@@ -2504,7 +2504,9 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
 
   // Append cloned blocks if there are any
   if (targetBlocks.length > 0) {
+    console.log("[handleChatLink] Target blocks fetched:", targetBlocks.length, "types:", targetBlocks.map(b => b.type));
     const blocksToAppend = targetBlocks.map(cleanBlockForAppend).filter(Boolean);
+    console.log("[handleChatLink] Blocks to append clean:", blocksToAppend.length, "types:", blocksToAppend.map(b => b.type));
     if (blocksToAppend.length > 0) {
       const CHUNK = 100;
       for (let i = 0; i < blocksToAppend.length; i += CHUNK) {
