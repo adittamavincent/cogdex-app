@@ -2441,14 +2441,28 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
         const resolvedMemoDbId = await resolveDataSourceId(MEMORANDUM_DB_ID);
         const resolvedEntryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
-        if (resolvedParentId === resolvedMemoDbId) {
+        const isMemo = (resolvedParentId === resolvedMemoDbId) || (parentId === MEMORANDUM_DB_ID);
+        const isEntry = (resolvedParentId === resolvedEntryDbId) || (parentId === ENTRY_DB_ID);
+
+        console.log("[handleChatLink] classification check:", {
+          parentId,
+          resolvedParentId,
+          MEMORANDUM_DB_ID,
+          resolvedMemoDbId,
+          ENTRY_DB_ID,
+          resolvedEntryDbId,
+          isMemo,
+          isEntry
+        });
+
+        if (isMemo) {
           // It's a Memorandum! Link via Memorandum relation
           const memoPropKey = findPropertyKey(entryPage.properties || {}, ["Memorandum", "Memo"]);
           if (memoPropKey) {
             propertiesToUpdate[memoPropKey] = { relation: [{ id: finalTargetPageId }] };
             debug(`Linked entry to Memorandum page ${finalTargetPageId} via property ${memoPropKey}`);
           }
-        } else if (resolvedParentId === resolvedEntryDbId) {
+        } else if (isEntry) {
           // It's an Entry! Link via Entries Referenced relation
           const entryPropKey = findPropertyKey(entryPage.properties || {}, ["Entries Referenced", "Entry", "Related Entry", "Related Back to Entry"]);
           if (entryPropKey) {
@@ -2459,6 +2473,7 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
           // Project page! Link via its Memorandum relation
           const memoRelations = targetPageObj.properties?.Memorandum?.relation || 
                               findProperty(targetPageObj.properties || {}, "Memorandum")?.relation || [];
+          console.log("[handleChatLink] Project page detected. memoRelations:", JSON.stringify(memoRelations, null, 2));
           if (memoRelations.length > 0) {
             const memoId = memoRelations[0].id;
             finalTargetPageId = memoId;
