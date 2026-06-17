@@ -120,7 +120,8 @@ export async function createEntry(params: {
     "REPO SNAP",
     "MEMO UPDT",
     "SYST LINK",
-    "TASK EXPO"
+    "TASK EXPO",
+    "TASK RESP"
   ]);
 
   const properties: Record<string, unknown> = {
@@ -178,7 +179,8 @@ export async function updateExistingEntryProperties(params: {
     "REPO SNAP",
     "MEMO UPDT",
     "SYST LINK",
-    "TASK EXPO"
+    "TASK EXPO",
+    "TASK RESP"
   ]);
 
   const properties: Record<string, unknown> = {

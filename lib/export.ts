@@ -216,7 +216,8 @@ async function getIncludedEntries(thoughtId: string) {
     "MEMO UPDT",
     "REPO SNAP",
     "SYST LINK",
-    "TASK EXPO"
+    "TASK EXPO",
+    "TASK RESP"
   ]);
 
   const entries = rawEntries.filter((e) => {
