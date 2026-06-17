@@ -2503,17 +2503,7 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
       const finalPageTitle = finalPageObj.properties?.Name?.title?.[0]?.plain_text ?? finalPageObj.properties?.Title?.title?.[0]?.plain_text ?? "Untitled";
       console.log("[handleChatLink] finalTargetPageId:", finalTargetPageId, "Title:", finalPageTitle);
 
-      let targetHasMore = true;
-      let targetStartCursor: string | undefined;
-      while (targetHasMore) {
-        const listResponse = await notion.blocks.children.list({
-          block_id: finalTargetPageId,
-          start_cursor: targetStartCursor,
-        });
-        targetBlocks.push(...listResponse.results);
-        targetHasMore = listResponse.has_more;
-        targetStartCursor = listResponse.next_cursor ?? undefined;
-      }
+      targetBlocks = await fetchBlocksRecursive(finalTargetPageId);
       if (targetBlocks.length > 0) {
         console.log("[handleChatLink] First block content details:", JSON.stringify(targetBlocks[0], null, 2));
       }
@@ -2601,11 +2591,25 @@ function cleanBlockForAppend(block: any): any {
     cleanContent.rich_text = sanitizeRichText(cleanContent.rich_text);
   }
 
-  return {
+  const result: any = {
     object: "block",
     type,
     [type]: cleanContent
   };
+
+  if (block.children && block.children.length > 0) {
+    const cleanChildren = block.children.map(cleanBlockForAppend).filter(Boolean);
+    if (cleanChildren.length > 0) {
+      result[type].children = cleanChildren;
+    }
+  }
+
+  // A table requires children to be valid when creating
+  if (type === "table" && (!result[type].children || result[type].children.length === 0)) {
+    return null;
+  }
+
+  return result;
 }
 
 function stripNulls(obj: any): any {
