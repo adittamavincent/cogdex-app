@@ -2431,7 +2431,8 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
   const targetPageId = extractNotionPageId(chatUrl);
   if (targetPageId) {
     try {
-      const targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
+      let finalTargetPageId = targetPageId;
+      let targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
       const parent = targetPageObj.parent;
       const parentId = parent?.database_id || parent?.data_source_id;
       if (parentId) {
@@ -2443,15 +2444,30 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
           // It's a Memorandum! Link via Memorandum relation
           const memoPropKey = findPropertyKey(entryPage.properties || {}, ["Memorandum", "Memo"]);
           if (memoPropKey) {
-            propertiesToUpdate[memoPropKey] = { relation: [{ id: targetPageId }] };
-            debug(`Linked entry to Memorandum page ${targetPageId} via property ${memoPropKey}`);
+            propertiesToUpdate[memoPropKey] = { relation: [{ id: finalTargetPageId }] };
+            debug(`Linked entry to Memorandum page ${finalTargetPageId} via property ${memoPropKey}`);
           }
         } else if (resolvedParentId === resolvedEntryDbId) {
           // It's an Entry! Link via Entries Referenced relation
           const entryPropKey = findPropertyKey(entryPage.properties || {}, ["Entries Referenced", "Entry", "Related Entry", "Related Back to Entry"]);
           if (entryPropKey) {
-            propertiesToUpdate[entryPropKey] = { relation: [{ id: targetPageId }] };
-            debug(`Linked entry to Entry page ${targetPageId} via property ${entryPropKey}`);
+            propertiesToUpdate[entryPropKey] = { relation: [{ id: finalTargetPageId }] };
+            debug(`Linked entry to Entry page ${finalTargetPageId} via property ${entryPropKey}`);
+          }
+        } else {
+          // Project page! Link via its Memorandum relation
+          const memoRelations = targetPageObj.properties?.Memorandum?.relation || 
+                              findProperty(targetPageObj.properties || {}, "Memorandum")?.relation || [];
+          if (memoRelations.length > 0) {
+            const memoId = memoRelations[0].id;
+            finalTargetPageId = memoId;
+            const memoPropKey = findPropertyKey(entryPage.properties || {}, ["Memorandum", "Memo"]);
+            if (memoPropKey) {
+              propertiesToUpdate[memoPropKey] = { relation: [{ id: memoId }] };
+              debug(`Linked entry to Memorandum page ${memoId} via project relation ${memoPropKey}`);
+            }
+          } else {
+            debug(`Project page ${targetPageId} has no linked Memorandum relation.`);
           }
         }
       }
@@ -2461,7 +2477,7 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
       let targetStartCursor: string | undefined;
       while (targetHasMore) {
         const listResponse = await notion.blocks.children.list({
-          block_id: targetPageId,
+          block_id: finalTargetPageId,
           start_cursor: targetStartCursor,
         });
         targetBlocks.push(...listResponse.results);
