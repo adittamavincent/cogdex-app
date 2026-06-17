@@ -2441,18 +2441,28 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
         const resolvedMemoDbId = await resolveDataSourceId(MEMORANDUM_DB_ID);
         const resolvedEntryDbId = await resolveDataSourceId(ENTRY_DB_ID);
 
-        const isMemo = (resolvedParentId === resolvedMemoDbId) || (parentId === MEMORANDUM_DB_ID);
-        const isEntry = (resolvedParentId === resolvedEntryDbId) || (parentId === ENTRY_DB_ID);
+        const props = targetPageObj.properties || {};
+        const hasTypeProp = !!findPropertyKey(props, ["Type"]);
+        const hasRepoUrlProp = !!findPropertyKey(props, ["Repo URL"]);
+        const hasChatUrlProp = !!findPropertyKey(props, ["CHAT URL"]);
+
+        let isEntry = hasTypeProp;
+        let isMemo = hasRepoUrlProp && !hasTypeProp;
+        
+        if (!isEntry && !isMemo && !hasChatUrlProp) {
+          // Fallback to parent ID check if properties are inconclusive
+          isMemo = (resolvedParentId === resolvedMemoDbId) || (parentId === MEMORANDUM_DB_ID);
+          isEntry = (resolvedParentId === resolvedEntryDbId) || (parentId === ENTRY_DB_ID);
+        }
 
         console.log("[handleChatLink] classification check:", {
           parentId,
           resolvedParentId,
-          MEMORANDUM_DB_ID,
-          resolvedMemoDbId,
-          ENTRY_DB_ID,
-          resolvedEntryDbId,
           isMemo,
-          isEntry
+          isEntry,
+          hasTypeProp,
+          hasRepoUrlProp,
+          hasChatUrlProp
         });
 
         if (isMemo) {
