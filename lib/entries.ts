@@ -2489,6 +2489,10 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
       }
 
       // Fetch all blocks from the target page to clone them
+      const finalPageObj = await notion.pages.retrieve({ page_id: finalTargetPageId }) as any;
+      const finalPageTitle = finalPageObj.properties?.Name?.title?.[0]?.plain_text ?? finalPageObj.properties?.Title?.title?.[0]?.plain_text ?? "Untitled";
+      console.log("[handleChatLink] finalTargetPageId:", finalTargetPageId, "Title:", finalPageTitle);
+
       let targetHasMore = true;
       let targetStartCursor: string | undefined;
       while (targetHasMore) {
@@ -2499,6 +2503,9 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
         targetBlocks.push(...listResponse.results);
         targetHasMore = listResponse.has_more;
         targetStartCursor = listResponse.next_cursor ?? undefined;
+      }
+      if (targetBlocks.length > 0) {
+        console.log("[handleChatLink] First block content details:", JSON.stringify(targetBlocks[0], null, 2));
       }
     } catch (err) {
       warn(`Failed to resolve or link target page from CHAT URL ${chatUrl}:`, err);
