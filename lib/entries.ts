@@ -2488,31 +2488,73 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
 
   // Append cloned blocks if there are any
   if (targetBlocks.length > 0) {
-    const blocksToAppend = targetBlocks.map(cleanBlockForAppend);
-    const CHUNK = 100;
-    for (let i = 0; i < blocksToAppend.length; i += CHUNK) {
-      await notion.blocks.children.append({
-        block_id: entryId,
-        children: blocksToAppend.slice(i, i + CHUNK),
-      });
+    const blocksToAppend = targetBlocks.map(cleanBlockForAppend).filter(Boolean);
+    if (blocksToAppend.length > 0) {
+      const CHUNK = 100;
+      for (let i = 0; i < blocksToAppend.length; i += CHUNK) {
+        await notion.blocks.children.append({
+          block_id: entryId,
+          children: blocksToAppend.slice(i, i + CHUNK),
+        });
+      }
+      debug(`Copied ${blocksToAppend.length} blocks from target page ${targetPageId} to entry ${entryId}`);
     }
-    debug(`Copied ${targetBlocks.length} blocks from target page ${targetPageId} to entry ${entryId}`);
   }
 
   debug(`Successfully finished handleChatLink for entry ${entryId}`);
 }
 
 function cleanBlockForAppend(block: any): any {
-  const { id, parent, last_edited_time, created_time, last_edited_by, created_by, has_children, archived, ...clean } = block;
-  const type = clean.type;
-  if (type && clean[type]) {
-    const content = { ...clean[type] };
-    if (content.rich_text) {
-      content.rich_text = sanitizeRichText(content.rich_text);
-    }
-    clean[type] = content;
+  const type = block.type;
+  if (!type) return null;
+
+  const WRITABLE_TYPES = new Set([
+    "paragraph",
+    "heading_1",
+    "heading_2",
+    "heading_3",
+    "bulleted_list_item",
+    "numbered_list_item",
+    "to_do",
+    "toggle",
+    "embed",
+    "image",
+    "video",
+    "file",
+    "pdf",
+    "bookmark",
+    "callout",
+    "quote",
+    "equation",
+    "divider",
+    "table_of_contents",
+    "column",
+    "column_list",
+    "link_to_page",
+    "synced_block",
+    "template",
+    "code",
+    "table",
+    "table_row"
+  ]);
+
+  if (!WRITABLE_TYPES.has(type)) {
+    return null;
   }
-  return clean;
+
+  const content = block[type];
+  if (!content) return null;
+
+  const cleanContent = { ...content };
+  if (cleanContent.rich_text) {
+    cleanContent.rich_text = sanitizeRichText(cleanContent.rich_text);
+  }
+
+  return {
+    object: "block",
+    type,
+    [type]: cleanContent
+  };
 }
 
 function extractNotionPageId(url: string): string | null {
