@@ -2433,6 +2433,7 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
     try {
       let finalTargetPageId = targetPageId;
       let targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
+      console.log("[handleChatLink] targetPageObj properties:", JSON.stringify(targetPageObj.properties, null, 2));
       const parent = targetPageObj.parent;
       const parentId = parent?.database_id || parent?.data_source_id;
       if (parentId) {
