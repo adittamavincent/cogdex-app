@@ -308,7 +308,7 @@ export async function handleSystemLink(thoughtId: string): Promise<void> {
       if (listResponse.results.length > 0) {
         await Promise.all(
           listResponse.results.map((block) =>
-            notion.blocks.delete({ block_id: block.id })
+            notion.blocks.delete({ block_id: block.id }).catch(err => warn(`Failed to delete block ${block.id}:`, err))
           )
         );
       }
