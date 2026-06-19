@@ -1435,6 +1435,42 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
   return blocks;
 }
 
+export function compileRepomixToCodeBlocks(text: string): Record<string, unknown>[] {
+  const blocks: Record<string, unknown>[] = [];
+  const maxChunkSize = 150000;
+  let remaining = text;
+  
+  while (remaining.length > 0) {
+    const chunk = remaining.slice(0, maxChunkSize);
+    remaining = remaining.slice(maxChunkSize);
+    
+    const richText: Record<string, unknown>[] = [];
+    let chunkRemaining = chunk;
+    while (chunkRemaining.length > 0) {
+      const rtText = chunkRemaining.slice(0, 1900);
+      chunkRemaining = chunkRemaining.slice(1900);
+      richText.push({
+        type: "text",
+        text: {
+          content: rtText,
+        },
+      });
+    }
+    
+    blocks.push({
+      object: "block",
+      type: "code",
+      code: {
+        rich_text: richText,
+        language: "markdown",
+      },
+    });
+  }
+  
+  return blocks;
+}
+
+
 
 const READ_ONLY_KEYS = [
   "id",

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink } from "@/lib/entries";
+import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, compileRepomixToCodeBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -263,7 +263,7 @@ export async function POST(req: NextRequest) {
         await setExclusiveInclude(projectId, "REPO SNAP", activeEntryId);
 
         // write output in chunks
-        const blocks = markdownToRichNotionBlocks(repomixOutput);
+        const blocks = compileRepomixToCodeBlocks(repomixOutput);
         const CHUNK = 100;
         for (let i = 0; i < blocks.length; i += CHUNK) {
           await notion.blocks.children.append({
