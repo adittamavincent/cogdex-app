@@ -1670,22 +1670,10 @@ export async function handleUserComment(triggeredId: string) {
     warn(`Failed to update targetEntry properties:`, err);
   }
 
-    // 2. Fetch all blocks from sourceEntry
-  const blocks: any[] = [];
-  let hasMore = true;
-  let startCursor: string | undefined;
+    // 2. Fetch all blocks from sourceEntry recursively
+  const sourceBlocks = await fetchBlocksRecursive(sourceEntry.id);
 
-  while (hasMore) {
-    const listResponse = await notion.blocks.children.list({
-      block_id: sourceEntry.id,
-      start_cursor: startCursor,
-    });
-    blocks.push(...listResponse.results);
-    hasMore = listResponse.has_more;
-    startCursor = listResponse.next_cursor ?? undefined;
-  }
-
-  // Fetch all blocks from the memorandum page (if exists)
+  // Fetch all blocks from the memorandum page (if exists) recursively
   const memorandumBlocks: any[] = [];
   let memorandumPageId = "";
   try {
@@ -1700,27 +1688,32 @@ export async function handleUserComment(triggeredId: string) {
 
     if (memorandumPagesResponse.results.length > 0) {
       memorandumPageId = memorandumPagesResponse.results[0].id;
-      let memorandumHasMore = true;
-      let memorandumStartCursor: string | undefined;
-      while (memorandumHasMore) {
-        const listResponse = await notion.blocks.children.list({
-          block_id: memorandumPageId,
-          start_cursor: memorandumStartCursor,
-        });
-        memorandumBlocks.push(...listResponse.results);
-        memorandumHasMore = listResponse.has_more;
-        memorandumStartCursor = listResponse.next_cursor ?? undefined;
-      }
+      const memoBlocksList = await fetchBlocksRecursive(memorandumPageId);
+      memorandumBlocks.push(...memoBlocksList);
     }
   } catch (err) {
     warn("Failed to retrieve memorandum page blocks for comments copy:", err);
   }
 
+  function getAllBlocksFlattened(blocksList: any[]): any[] {
+    const result: any[] = [];
+    for (const b of blocksList) {
+      result.push(b);
+      if (b.children && b.children.length > 0) {
+        result.push(...getAllBlocksFlattened(b.children));
+      }
+    }
+    return result;
+  }
+
+  const allSourceBlocksFlat = getAllBlocksFlattened(sourceBlocks);
+  const allMemorandumBlocksFlat = getAllBlocksFlattened(memorandumBlocks);
+
     // 3. For each block/page, fetch comments
   const newBlocks: any[] = [];
   const itemsToScan: Array<{ id: string; type: string; raw?: any }> = [
-    ...blocks.map(b => ({ id: b.id, type: b.type, raw: b })),
-    ...memorandumBlocks.map(b => ({ id: b.id, type: b.type, raw: b })),
+    ...allSourceBlocksFlat.map(b => ({ id: b.id, type: b.type, raw: b })),
+    ...allMemorandumBlocksFlat.map(b => ({ id: b.id, type: b.type, raw: b })),
     { id: sourceEntry.id, type: "page" },
     ...(memorandumPageId ? [{ id: memorandumPageId, type: "page" }] : [])
   ];
@@ -1730,9 +1723,21 @@ export async function handleUserComment(triggeredId: string) {
       const commentsRes = await notion.comments.list({ block_id: item.id });
       if (commentsRes.results.length > 0) {
         // Find text content
-        let blockTextRichText = [];
-        if (item.type !== "page" && item.raw && item.raw[item.type] && item.raw[item.type].rich_text) {
-          blockTextRichText = sanitizeRichText(item.raw[item.type].rich_text);
+        let blockTextRichText: any[] = [];
+        if (item.type !== "page" && item.raw && item.raw[item.type]) {
+          if (item.raw[item.type].rich_text) {
+            blockTextRichText = sanitizeRichText(item.raw[item.type].rich_text);
+          } else if (item.type === "table_row" && item.raw.table_row?.cells) {
+            const cellTexts: string[] = [];
+            for (const cell of item.raw.table_row.cells) {
+              cellTexts.push(getRichTextPlain(cell));
+            }
+            const rowStr = `| ${cellTexts.join(" | ")} |`;
+            blockTextRichText = [{
+              type: "text",
+              text: { content: rowStr }
+            }];
+          }
         }
 
         if (blockTextRichText.length > 0) {
