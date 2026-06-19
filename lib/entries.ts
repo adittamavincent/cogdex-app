@@ -1718,10 +1718,19 @@ export async function handleUserComment(triggeredId: string) {
     ...(memorandumPageId ? [{ id: memorandumPageId, type: "page" }] : [])
   ];
 
+  const seenCommentIds = new Set<string>();
+
   for (const item of itemsToScan) {
     try {
       const commentsRes = await notion.comments.list({ block_id: item.id });
-      if (commentsRes.results.length > 0) {
+      
+      const directComments = commentsRes.results.filter((comment: any) => {
+        if (seenCommentIds.has(comment.id)) return false;
+        const parentId = comment.parent?.block_id || comment.parent?.page_id || comment.parent?.database_id;
+        return parentId === item.id;
+      });
+
+      if (directComments.length > 0) {
         // Find text content
         let blockTextRichText: any[] = [];
         if (item.type !== "page" && item.raw && item.raw[item.type]) {
@@ -1749,7 +1758,8 @@ export async function handleUserComment(triggeredId: string) {
         }
 
         // Add the comments
-        for (const comment of commentsRes.results) {
+        for (const comment of directComments) {
+           seenCommentIds.add(comment.id);
            newBlocks.push({
              object: "block",
              type: "callout",
