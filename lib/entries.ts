@@ -1213,11 +1213,91 @@ function buildRichTextForCodeBlock(codeBlockLines: Array<{ text: string, type: "
   return richText;
 }
 
+function parseTableRows(lines: Array<{ text: string, type: "normal" | "added" }>) {
+  const rows: Array<{ cells: string[], type: "normal" | "added" }> = [];
+  let currentRow: { cells: string[], type: "normal" | "added", endsWithPipe: boolean } | null = null;
+  
+  let numCols = 0;
+  if (lines.length > 0) {
+    const firstLine = lines[0].text.trim();
+    if (firstLine.startsWith("|")) {
+      const parts = lines[0].text.split("|").slice(1);
+      if (firstLine.endsWith("|") && parts.length > 0) {
+        parts.pop();
+      }
+      numCols = parts.length;
+    }
+  }
+
+  for (const line of lines) {
+    const lineText = line.text.trim();
+    if (lineText.startsWith("|")) {
+      if (currentRow) {
+        rows.push({ cells: currentRow.cells, type: currentRow.type });
+      }
+      const parts = line.text.split("|");
+      const rawCells = parts.slice(1);
+      let endsWithPipe = false;
+      if (lineText.endsWith("|") && rawCells.length > 0) {
+        rawCells.pop();
+        endsWithPipe = true;
+      }
+      currentRow = {
+        cells: rawCells.map(c => c.trim()),
+        type: line.type,
+        endsWithPipe
+      };
+    } else {
+      if (currentRow) {
+        const parts = line.text.split("|");
+        if (currentRow.cells.length > 0) {
+          currentRow.cells[currentRow.cells.length - 1] += "\n" + parts[0].trim();
+        } else {
+          currentRow.cells.push(parts[0].trim());
+        }
+        const rawCells = parts.slice(1);
+        let endsWithPipe = false;
+        if (lineText.endsWith("|") && rawCells.length > 0) {
+          rawCells.pop();
+          endsWithPipe = true;
+        }
+        currentRow.cells.push(...rawCells.map(c => c.trim()));
+        currentRow.endsWithPipe = endsWithPipe;
+      } else {
+        currentRow = {
+          cells: [lineText],
+          type: line.type,
+          endsWithPipe: false
+        };
+      }
+    }
+  }
+  if (currentRow) {
+    rows.push({ cells: currentRow.cells, type: currentRow.type });
+  }
+  return { rows, numCols };
+}
+
+function isTableContinuation(lineText: string, tableLines: Array<{ text: string, type: "normal" | "added" }>): boolean {
+  const trimmed = lineText.trim();
+  if (trimmed === "") return false;
+  if (trimmed.startsWith("```")) return false;
+  if (trimmed.startsWith(">")) return false;
+  if (trimmed.match(/^(#{1,6})\s+/)) return false;
+  if (trimmed === "---" || trimmed === "***" || trimmed === "___") return false;
+
+  const { rows, numCols } = parseTableRows(tableLines);
+  if (rows.length === 0) return true;
+  const lastRow = rows[rows.length - 1];
+  
+  if (lastRow.cells.length < numCols) {
+    return true;
+  }
+  return false;
+}
+
 function buildTableBlock(lines: Array<{ text: string, type: "normal" | "added" }>): Record<string, unknown> {
-  const rows = lines.map(l => {
-    const cells = l.text.trim().split("|").slice(1, -1).map(c => c.trim());
-    return { cells, type: l.type };
-  });
+  const { rows, numCols } = parseTableRows(lines);
 
   let hasHeader = false;
   let dataRows = rows;
@@ -1317,7 +1397,7 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
     const isTableLine = trimmedText.startsWith("|") && trimmedText.endsWith("|");
 
     if (inTable) {
-      if (isTableLine) {
+      if (trimmedText.startsWith("|") || isTableContinuation(line.text, tableLines)) {
         tableLines.push(line);
         continue;
       } else {

@@ -483,13 +483,29 @@ async function getLatestRepoSnap(thoughtId: string): Promise<string | null> {
   return await readPageContent(pageId);
 }
 
+async function hasMemoRespEntry(thoughtId: string): Promise<boolean> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const response = await notion.dataSources.query({
+    data_source_id: entryDbId,
+    filter: {
+      and: [
+        { property: "Project", relation: { contains: thoughtId } },
+        { property: "Type", select: { equals: "MEMO RESP" } }
+      ]
+    },
+    page_size: 1
+  });
+  return response.results.length > 0;
+}
+
 // Build the full XML context string and return the involved entry/prompt IDs
 async function buildXML(thoughtId: string, exportType: PageType | boolean = false): Promise<{ xml: string; entryIds: string[]; promptIds: string[] }> {
-  const [entries, prompts, latestMemorandum, latestRepoSnap] = await Promise.all([
+  const [entries, prompts, latestMemorandum, latestRepoSnap, hasMemoResp] = await Promise.all([
     getIncludedEntries(thoughtId),
     getIncludedSystemPrompts(),
     getLatestMemorandum(thoughtId),
     getLatestRepoSnap(thoughtId),
+    hasMemoRespEntry(thoughtId),
   ]);
 
   // Fetch all prompt and entry page contents concurrently to avoid sequential round-trip API delays
@@ -503,7 +519,7 @@ async function buildXML(thoughtId: string, exportType: PageType | boolean = fals
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  const hasMemorandum = (latestMemorandum !== null) || (memorandumContentObj !== null) || entries.some((e) => e.properties?.Type?.select?.name === "MEMO RESP");
+  const hasMemorandum = hasMemoResp;
   lines.push(getDefaultProtocol(exportType, hasMemorandum));
   if (promptContents.length > 0) {
     lines.push("");
