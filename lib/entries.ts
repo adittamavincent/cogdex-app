@@ -1248,7 +1248,7 @@ function parseTableRows(lines: Array<{ text: string, type: "normal" | "added" }>
         endsWithPipe
       };
     } else {
-      if (currentRow) {
+      if (currentRow && (!currentRow.endsWithPipe || currentRow.cells.length < numCols)) {
         const parts = line.text.split("|");
         if (currentRow.cells.length > 0) {
           currentRow.cells[currentRow.cells.length - 1] += "\n" + parts[0].trim();
@@ -1264,11 +1264,17 @@ function parseTableRows(lines: Array<{ text: string, type: "normal" | "added" }>
         currentRow.cells.push(...rawCells.map(c => c.trim()));
         currentRow.endsWithPipe = endsWithPipe;
       } else {
-        currentRow = {
-          cells: [lineText],
-          type: line.type,
-          endsWithPipe: false
-        };
+        if (currentRow) {
+          rows.push({ cells: currentRow.cells, type: currentRow.type });
+          currentRow = null;
+        }
+        if (lineText !== "") {
+          currentRow = {
+            cells: [lineText],
+            type: line.type,
+            endsWithPipe: false
+          };
+        }
       }
     }
   }
@@ -1280,7 +1286,6 @@ function parseTableRows(lines: Array<{ text: string, type: "normal" | "added" }>
 
 function isTableContinuation(lineText: string, tableLines: Array<{ text: string, type: "normal" | "added" }>): boolean {
   const trimmed = lineText.trim();
-  if (trimmed === "") return false;
   if (trimmed.startsWith("```")) return false;
   if (trimmed.startsWith(">")) return false;
   if (trimmed.match(/^(#{1,6})\s+/)) return false;
@@ -1394,13 +1399,27 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
     }
 
     const trimmedText = line.text.trim();
-    const isTableLine = trimmedText.startsWith("|") && trimmedText.endsWith("|");
+    const isTableLine = trimmedText.startsWith("|");
 
     if (inTable) {
       if (trimmedText.startsWith("|") || isTableContinuation(line.text, tableLines)) {
         tableLines.push(line);
         continue;
       } else {
+        let nextTableLineFound = false;
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextTrimmed = lines[j].text.trim();
+          if (nextTrimmed === "") continue;
+          if (nextTrimmed.startsWith("|")) {
+            nextTableLineFound = true;
+          }
+          break;
+        }
+        if (nextTableLineFound) {
+          tableLines.push(line);
+          continue;
+        }
+
         blocks.push(buildTableBlock(tableLines));
         inTable = false;
         tableLines = [];
