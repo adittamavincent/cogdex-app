@@ -280,6 +280,10 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 2. The last \`<entry type="CHAT USER">\` is the current goal.
 3. Earlier entries are immutable history. Do not recreate them.
 4. If context is incomplete/ambiguous, state the gap explicitly.
+
+## Formatting Rules
+1. Lists: Strictly use minus (\`-\`) for unordered lists. Do NOT use asterisk (\`*\`).
+2. Citations / Footnotes: Use escaped asterisks (\`\\*\` e.g., \`\\* = penjelasan\`) or markdown footnote syntax (\`[^1]\` and \`[^1]: penjelasan\`) to prevent markdown parsers from converting them into list items.
 `;
 
   const isMemorandumExport = exportType === true || exportType === "MEMO EXPO";

@@ -1457,7 +1457,7 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
       continue;
     }
 
-    const todoMatch = line.text.match(/^\s*[-*+]\s+\[([ xX])\](?:\s+(.*))?$/);
+    const todoMatch = line.text.match(/^\s*[-+]\s+\[([ xX])\](?:\s+(.*))?$/);
     if (todoMatch) {
       const checked = todoMatch[1].toLowerCase() === "x";
       blocks.push({
@@ -1471,7 +1471,7 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
       continue;
     }
 
-    const bulletMatch = line.text.match(/^\s*[-*+]\s+(.*)$/);
+    const bulletMatch = line.text.match(/^\s*[-+]\s+(.*)$/);
     if (bulletMatch) {
       blocks.push({
         object: "block",
