@@ -2280,6 +2280,41 @@ export async function updatePageBlocks(
   keepFirstBlock: boolean = false,
   forceWipe: boolean = false
 ): Promise<void> {
+  // Fast path: skip all fetch/diff when we're going to wipe everything anyway.
+  // This saves 10-20s of wasted Notion API calls that caused Vercel timeouts.
+  if (forceWipe && !keepFirstBlock) {
+    let newBlocks = markdownToRichNotionBlocks(newMarkdown);
+    newBlocks = newBlocks.map(b => cleanBlock(b));
+    debug(`[updatePageBlocks] forceWipe fast path: erasing + appending ${newBlocks.length} blocks`);
+
+    try {
+      await notion.request({
+        path: `pages/${pageId}`,
+        method: "patch",
+        body: { erase_content: true }
+      });
+      debug(`Successfully erased content using erase_content API for page ${pageId}`);
+    } catch (err) {
+      warn(`Failed to use erase_content on page ${pageId}, falling back to manual deletion:`, err);
+      const existingBlocks = await fetchBlocksRecursive(pageId);
+      const CHUNK = 50;
+      for (let i = 0; i < existingBlocks.length; i += CHUNK) {
+        const chunk = existingBlocks.slice(i, i + CHUNK);
+        await Promise.all(
+          chunk.map((block) => notion.blocks.delete({ block_id: block.id }).catch(e => warn(`Failed to delete block ${block.id}:`, e)))
+        );
+      }
+    }
+
+    for (let i = 0; i < newBlocks.length; i += 50) {
+      await notion.blocks.children.append({
+        block_id: pageId,
+        children: newBlocks.slice(i, i + 50) as any,
+      });
+    }
+    return;
+  }
+
   debug(`Fetching existing blocks recursively for page ${pageId}`);
   const nestedBlocks = await fetchBlocksRecursive(pageId);
 

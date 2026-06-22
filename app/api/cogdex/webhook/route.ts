@@ -198,39 +198,71 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Repomix packing with timeout
+      // Parse GitHub URL to owner/repo for tarball download
+      const parseGitHub = (url: string): { owner: string; repo: string; branch?: string } | null => {
+        const shorthand = url.match(/^([^/\s]+)\/([^/\s]+)$/);
+        if (shorthand) return { owner: shorthand[1], repo: shorthand[2] };
+        const full = url.match(/github\.com[:/]([^/]+)\/([^/.#\s]+)(?:\.git)?(?:\/tree\/([^\s]+))?/);
+        if (full) return { owner: full[1], repo: full[2], branch: full[3] };
+        return null;
+      };
+
+      const ghInfo = parseGitHub(repoUrl);
+      if (!ghInfo) {
+        return Response.json({ error: `Only GitHub URLs are supported for REPO SNAP. Got: ${repoUrl}` }, { status: 400 });
+      }
+
+      // Download tarball from GitHub API, extract locally, run repomix (no git binary needed)
       const repomixPromise = async () => {
         const { runCli } = await import("repomix");
         const fs = await import("fs/promises");
         const path = await import("path");
         const os = await import("os");
         const crypto = await import("crypto");
-        
-        const tempFile = path.join(os.tmpdir(), `repomix-${crypto.randomUUID()}.txt`);
-        
+        const { execSync } = await import("child_process");
+
+        const tmpDir = path.join(os.tmpdir(), `cogdex-repo-${crypto.randomUUID()}`);
+        await fs.mkdir(tmpDir, { recursive: true });
+
         try {
-          // Vercel sometimes has issues with Tree-sitter WASM modules in Next.js Serverless functions
-          // If it fails with compression, we fallback to non-compressed.
-          await runCli([], process.cwd(), {
-            remote: repoUrl,
-            compress: true,
-            output: tempFile
+          // 1. Download tarball from GitHub API
+          const ref = ghInfo.branch || "HEAD";
+          const tarballUrl = `https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/tarball/${ref}`;
+          const tarResponse = await fetch(tarballUrl, {
+            headers: { "Accept": "application/vnd.github+json", "User-Agent": "cogdex-app" },
+            redirect: "follow",
           });
-        } catch (err: any) {
-          logError("Repomix with compress failed, falling back without compress:", err);
-          await runCli([], process.cwd(), {
-            remote: repoUrl,
-            compress: false,
-            output: tempFile
-          });
+          if (!tarResponse.ok) {
+            throw new Error(`GitHub tarball download failed: ${tarResponse.status} ${tarResponse.statusText}`);
+          }
+
+          // 2. Write and extract tarball
+          const tarPath = path.join(tmpDir, "repo.tar.gz");
+          const buffer = Buffer.from(await tarResponse.arrayBuffer());
+          await fs.writeFile(tarPath, buffer);
+
+          const extractDir = path.join(tmpDir, "extracted");
+          await fs.mkdir(extractDir, { recursive: true });
+          execSync(`tar xzf "${tarPath}" -C "${extractDir}" --strip-components=1`, { timeout: 15000 });
+
+          // 3. Run repomix locally on extracted files (no --remote, no git needed)
+          const tempFile = path.join(tmpDir, "repomix-output.txt");
+          try {
+            await runCli([], extractDir, { output: tempFile, compress: true });
+          } catch (err: any) {
+            logError("Repomix with compress failed, falling back without compress:", err);
+            await runCli([], extractDir, { output: tempFile, compress: false });
+          }
+
+          const content = await fs.readFile(tempFile, "utf-8");
+          return content;
+        } finally {
+          // 4. Cleanup temp files
+          await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         }
-        
-        const content = await fs.readFile(tempFile, "utf-8");
-        await fs.unlink(tempFile).catch(() => {});
-        return content;
       };
 
-      const timeoutPromise = new Promise<string>((_, reject) => 
+      const timeoutPromise = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error("Repomix timed out — try a smaller repo or scope with --include")), 45000)
       );
 
