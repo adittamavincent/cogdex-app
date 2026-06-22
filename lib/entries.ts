@@ -1178,6 +1178,59 @@ export function applyPatch(baseText: string, patchText: string): Array<{ text: s
       }
     }
 
+    // Fallback 2: Fuzzy Sequential Matching
+    if (foundIndex === -1) {
+      let bestScore = 0;
+      let bestIdx = -1;
+      let bestMatchedLength = 0;
+      let bestMapping: number[] = [];
+      let bestMappingCounts: number[] = [];
+
+      for (let i = 0; i < baseLines.length; i++) {
+        let score = 0;
+        let b = i;
+        const mapping = new Array(searchLines.length).fill(-1);
+        const mappingCounts = new Array(searchLines.length).fill(0);
+
+        for (let s = 0; s < searchLines.length; s++) {
+          const sLine = searchLines[s];
+          const sNorm = superNormalize(sLine);
+          if (sNorm === "") continue;
+
+          let found = false;
+          for (let lookahead = 0; lookahead < 10; lookahead++) {
+            if (b + lookahead >= baseLines.length) break;
+            const bNorm = superNormalize(baseLines[b + lookahead].text);
+            const isMatch = bNorm === sNorm || (sNorm.length > 5 && bNorm.length > 5 && (sNorm.includes(bNorm) || bNorm.includes(sNorm)));
+            if (isMatch) {
+              score += 1;
+              mapping[s] = b + lookahead;
+              mappingCounts[s] = 1;
+              b += lookahead + 1;
+              found = true;
+              break;
+            }
+          }
+        }
+
+        const nonBlankCount = searchLines.filter(l => superNormalize(l) !== "").length;
+        if (score > bestScore && score >= Math.ceil(nonBlankCount * 0.4)) {
+          bestScore = score;
+          bestIdx = i;
+          bestMatchedLength = b - i;
+          bestMapping = mapping;
+          bestMappingCounts = mappingCounts;
+        }
+      }
+
+      if (bestScore > 0) {
+        foundIndex = bestIdx;
+        matchedLength = bestMatchedLength;
+        foundMapping = bestMapping;
+        foundMappingCounts = bestMappingCounts;
+      }
+    }
+
     if (foundIndex !== -1) {
       if (foundMapping) {
         const newLines: { text: string, type: "normal" | "added" }[] = [];
