@@ -267,10 +267,10 @@ export async function POST(req: NextRequest) {
           // 3. Run repomix locally on extracted files (no --remote, no git needed)
           const tempFile = path.join(tmpDir, "repomix-output.txt");
           try {
-            await runCli([], extractDir, { output: tempFile, compress: true });
+            await runCli(['.'], extractDir, { output: tempFile, compress: true });
           } catch (err: any) {
             logError("Repomix with compress failed, falling back without compress:", err);
-            await runCli([], extractDir, { output: tempFile, compress: false });
+            await runCli(['.'], extractDir, { output: tempFile, compress: false });
           }
 
           const content = await fs.readFile(tempFile, "utf-8");
