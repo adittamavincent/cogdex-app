@@ -13,12 +13,14 @@
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "repomix": "^1.14.1"
+    "repomix": "^1.14.1",
+    "tar": "^7.5.16"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/tar": "^7.0.87",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "typescript": "^5"

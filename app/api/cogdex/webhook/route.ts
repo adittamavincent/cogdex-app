@@ -233,7 +233,7 @@ export async function POST(req: NextRequest) {
         const path = await import("path");
         const os = await import("os");
         const crypto = await import("crypto");
-        const { execSync } = await import("child_process");
+        const tar = await import("tar");
 
         const tmpDir = path.join(os.tmpdir(), `cogdex-repo-${crypto.randomUUID()}`);
         await fs.mkdir(tmpDir, { recursive: true });
@@ -257,7 +257,12 @@ export async function POST(req: NextRequest) {
 
           const extractDir = path.join(tmpDir, "extracted");
           await fs.mkdir(extractDir, { recursive: true });
-          execSync(`tar xzf "${tarPath}" -C "${extractDir}" --strip-components=1`, { timeout: 15000 });
+          
+          await tar.x({
+            file: tarPath,
+            cwd: extractDir,
+            strip: 1,
+          });
 
           // 3. Run repomix locally on extracted files (no --remote, no git needed)
           const tempFile = path.join(tmpDir, "repomix-output.txt");

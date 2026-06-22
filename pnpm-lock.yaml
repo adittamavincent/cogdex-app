@@ -23,6 +23,9 @@ importers:
       repomix:
         specifier: ^1.14.1
         version: 1.14.1(typescript@5.9.3)
+      tar:
+        specifier: ^7.5.16
+        version: 7.5.16
     devDependencies:
       '@types/node':
         specifier: ^20
@@ -33,6 +36,9 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.2.3(@types/react@19.2.15)
+      '@types/tar':
+        specifier: ^7.0.87
+        version: 7.0.87
       eslint:
         specifier: ^9
         version: 9.39.4(jiti@2.7.0)
@@ -516,6 +522,10 @@ packages:
 
   '@types/react@19.2.15':
     resolution: {integrity: sha512-eRwcGNHve+E8qtEQSSRl6urh+rFop4v8gm6O8rGv25CodbvFdLjA1vVQ1KkiFE0w0UPOnb8tDiFKL5lp0rtY5Q==}
+
+  '@types/tar@7.0.87':
+    resolution: {integrity: sha512-3IxNBV8LeY5oi2ZFpvAhOtW1+mHswkzM7BuisVrwJgPv67GBO2rkLPQlEKtzfHuLdhDDczhkCZeT+RuizMay4A==}
+    deprecated: This is a stub types definition. tar provides its own type definitions, so you do not need this installed.
 
   '@typescript-eslint/eslint-plugin@8.59.4':
     resolution: {integrity: sha512-PegsU+XfyJJNjd4+u/k6f9yTyp0lEXXiPopUNobZcIAUJFGICFLN+sP0Rb3JehVmiij1Ph0dFGYqODoRo/2+6A==}
@@ -2674,6 +2684,10 @@ snapshots:
   '@types/react@19.2.15':
     dependencies:
       csstype: 3.2.3
+
+  '@types/tar@7.0.87':
+    dependencies:
+      tar: 7.5.16
 
   '@typescript-eslint/eslint-plugin@8.59.4(@typescript-eslint/parser@8.59.4(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3)':
     dependencies:
