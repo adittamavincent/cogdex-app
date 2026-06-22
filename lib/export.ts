@@ -321,9 +321,10 @@ You MUST generate an "Agent Execution Prompt" ready to be copied and pasted to a
 ## Memorandum Output Mode (Git Diff Required)
 A previous Memorandum exists (see \`<entry type="MEMO">\` in the context below). You MUST output a unified git diff representing the changes to apply to the existing Memorandum.
 
-### CRITICAL: This is NOT a Chat Response
+### CRITICAL: This is NOT a Chat Response & NO Artifacts Allowed
 - **Do NOT reply to or answer any \`CHAT USER\` message.** You are not having a conversation.
 - **Do NOT start with greetings, acknowledgments, or filler** ("Here is the updated memorandum", "Based on our discussion", etc.).
+- **Do NOT generate any source code files, presentation files, or other artifacts.** You are strictly prohibited from outputting anything other than the unified git diff block representing the changes to the Memorandum.
 - Your ONLY job is to read the full conversation, identify what was agreed/decided/changed since the last Memorandum, and produce a unified diff that updates the Memorandum accordingly.
 - If nothing changed, output an empty diff block.
 
@@ -348,16 +349,17 @@ A previous Memorandum exists (see \`<entry type="MEMO">\` in the context below).
 
 ### Memorandum Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
-Do NOT include: conversation history, reasoning, drafts, or TODO lists.
+Do NOT include: conversation history, reasoning, drafts, TODO lists, external codebases, presentations, or extra files.
 `;
     } else {
       return `${commonHeader}
 ## Memorandum Output Mode (Full Document — First Initialization)
 No previous Memorandum exists. You MUST output the complete, full Memorandum document.
 
-### CRITICAL: This is NOT a Chat Response
+### CRITICAL: This is NOT a Chat Response & NO Artifacts Allowed
 - **Do NOT reply to or answer any \`CHAT USER\` message.** You are not having a conversation.
 - **Do NOT start with greetings, acknowledgments, or filler** ("Here is the memorandum", "Based on our discussion", etc.).
+- **Do NOT generate any source code files, presentation files, or other artifacts.** You are strictly prohibited from outputting anything other than the single complete Memorandum document.
 - Your ONLY job is to read the full conversation, identify ALL agreed-upon decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan, and synthesize them into a structured Memorandum document.
 
 ### Full Document Contract
@@ -369,7 +371,7 @@ No previous Memorandum exists. You MUST output the complete, full Memorandum doc
 
 ### Memorandum Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
-Do NOT include: conversation history, reasoning, drafts, or TODO lists.
+Do NOT include: conversation history, reasoning, drafts, TODO lists, external codebases, presentations, or extra files.
 `;
     }
   } else {
