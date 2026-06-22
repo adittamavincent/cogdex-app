@@ -391,18 +391,6 @@ Produce a regular response entry answering the user's intent.
 
 // Fetch the latest memorandum content, falling back to reconstructing from Entries DB if Memorandum DB doesn't have it.
 async function getMemorandumContent(thoughtId: string, latestMemorandumPage: NotionPage | null): Promise<{ content: string; title: string } | null> {
-  if (latestMemorandumPage) {
-    try {
-      const memorandumContent = await readPageContent(latestMemorandumPage.id);
-      if (memorandumContent && memorandumContent.trim()) {
-        const title = latestMemorandumPage.properties?.Name?.title?.[0]?.plain_text ?? latestMemorandumPage.properties?.Title?.title?.[0]?.plain_text ?? "Memorandum";
-        return { content: memorandumContent.trim(), title };
-      }
-    } catch (err) {
-      console.warn(`Failed to read memorandum page ${latestMemorandumPage.id}, falling back to Entries DB:`, err);
-    }
-  }
-
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
   const response = await notion.dataSources.query({
     data_source_id: entryDbId,
