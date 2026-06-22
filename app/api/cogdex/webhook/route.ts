@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, compileRepomixToCodeBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink } from "@/lib/entries";
+import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, compileRepomixToCodeBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink, getNextEntryNumber } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -212,6 +212,20 @@ export async function POST(req: NextRequest) {
         return Response.json({ error: `Only GitHub URLs are supported for REPO SNAP. Got: ${repoUrl}` }, { status: 400 });
       }
 
+      let commitId = "";
+      try {
+        const ref = ghInfo.branch || "HEAD";
+        const shaResponse = await fetch(`https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/commits/${ref}`, {
+          headers: { "Accept": "application/vnd.github.sha", "User-Agent": "cogdex-app" },
+        });
+        if (shaResponse.ok) {
+          const sha = await shaResponse.text();
+          commitId = sha.trim().slice(0, 7);
+        }
+      } catch (err) {
+        console.error("Failed to fetch commit SHA:", err);
+      }
+
       // Download tarball from GitHub API, extract locally, run repomix (no git binary needed)
       const repomixPromise = async () => {
         const { runCli } = await import("repomix");
@@ -289,6 +303,33 @@ export async function POST(req: NextRequest) {
       } else {
         const { pageId } = await createEntry({ thoughtId: projectId, pageType: "REPO SNAP" });
         activeEntryId = pageId;
+      }
+
+      if (activeEntryId) {
+        let entryNumber = "";
+        try {
+          const entryPageObj = await notion.pages.retrieve({ page_id: activeEntryId }) as any;
+          const nameProp = findProperty(entryPageObj.properties || {}, "Name");
+          const currentName = nameProp?.title?.[0]?.plain_text ?? "";
+          if (/^\d+$/.test(currentName.trim())) {
+            entryNumber = currentName.trim();
+          } else {
+            const nextNum = await getNextEntryNumber(projectId);
+            entryNumber = String(nextNum);
+          }
+        } catch (err) {
+          console.error("Failed to retrieve entry page name:", err);
+        }
+
+        if (entryNumber) {
+          const finalTitle = commitId ? `${entryNumber} - ${commitId}` : entryNumber;
+          await notion.pages.update({
+            page_id: activeEntryId,
+            properties: {
+              Name: { title: [{ text: { content: finalTitle } }] }
+            }
+          });
+        }
       }
 
       if (activeEntryId) {

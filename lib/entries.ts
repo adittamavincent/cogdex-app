@@ -75,7 +75,7 @@ export function findProperty(properties: Record<string, any>, name: string): any
   return matchedKey ? properties[matchedKey] : null;
 }
 
-async function getNextEntryNumber(projectId: string, excludeEntryId?: string): Promise<number> {
+export async function getNextEntryNumber(projectId: string, excludeEntryId?: string): Promise<number> {
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
   const response = await notion.dataSources.query({
     data_source_id: entryDbId,
