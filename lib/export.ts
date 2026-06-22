@@ -270,6 +270,16 @@ async function getLatestMemorandum(thoughtId: string): Promise<NotionPage | null
 }
 
 function getDefaultProtocol(exportType: PageType | boolean, hasMemorandum: boolean): string {
+  const isMemorandumExport = exportType === true || exportType === "MEMO EXPO";
+  const isTaskExport = exportType === "TASK EXPO";
+
+  // Context Rule #2 differs based on export type:
+  // - MEMO EXPO: the goal is to synthesize agreements from the entire conversation, NOT to respond to the last user message.
+  // - Default: the last CHAT USER entry is the current goal.
+  const contextRule2 = isMemorandumExport
+    ? `2. The \`<entry type="CHAT USER">\` entries are conversation history for context. Your goal is NOT to reply to any of them — instead, **synthesize all agreed-upon decisions, constraints, and outcomes** from the entire conversation into a Memorandum.`
+    : `2. The last \`<entry type="CHAT USER">\` is the current goal.`;
+
   const commonHeader = `# Cogdex Operational Protocol
 
 This prompt establishes the protocol between the LLM and the Notion-based Cogdex workspace.
@@ -277,7 +287,7 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 
 ## Context & Chronology Rules
 1. Process \`<protocol>\` first, then \`<context>\` entries in chronological order.
-2. The last \`<entry type="CHAT USER">\` is the current goal.
+${contextRule2}
 3. Earlier entries are immutable history. Do not recreate them.
 4. If context is incomplete/ambiguous, state the gap explicitly.
 
@@ -285,9 +295,6 @@ The LLM must read the compiled \`<cogdex>\` XML structure and generate strictly 
 1. Lists: Strictly use minus (\`-\`) for unordered lists. Do NOT use asterisk (\`*\`).
 2. Citations / Footnotes: Use escaped asterisks (\`\\*\` e.g., \`\\* = penjelasan\`) or markdown footnote syntax (\`[^1]\` and \`[^1]: penjelasan\`) to prevent markdown parsers from converting them into list items.
 `;
-
-  const isMemorandumExport = exportType === true || exportType === "MEMO EXPO";
-  const isTaskExport = exportType === "TASK EXPO";
 
   if (isTaskExport) {
     return `${commonHeader}
@@ -312,7 +319,13 @@ You MUST generate an "Agent Execution Prompt" ready to be copied and pasted to a
     if (hasMemorandum) {
       return `${commonHeader}
 ## Memorandum Output Mode (Git Diff Required)
-A previous Memorandum exists. You MUST output a unified git diff representing the changes to apply to the existing Memorandum.
+A previous Memorandum exists (see \`<entry type="MEMO">\` in the context below). You MUST output a unified git diff representing the changes to apply to the existing Memorandum.
+
+### CRITICAL: This is NOT a Chat Response
+- **Do NOT reply to or answer any \`CHAT USER\` message.** You are not having a conversation.
+- **Do NOT start with greetings, acknowledgments, or filler** ("Here is the updated memorandum", "Based on our discussion", etc.).
+- Your ONLY job is to read the full conversation, identify what was agreed/decided/changed since the last Memorandum, and produce a unified diff that updates the Memorandum accordingly.
+- If nothing changed, output an empty diff block.
 
 ### Strictly Paste-Ready Unified Diff Contract
 - **Fenced Code Block ONLY**: The diff MUST be wrapped in a code block with the \`diff\` language tag:
@@ -339,34 +352,20 @@ Do NOT include: conversation history, reasoning, drafts, or TODO lists.
 `;
     } else {
       return `${commonHeader}
-## Memorandum Output Mode (Full Document or Git Diff)
-If a Memorandum has ALREADY been created/defined in this chat session OR is present in the <context> below (e.g. as a MEMO RESP/MEMO EXPO entry), you MUST output a unified git diff representing the changes.
-Otherwise (if this is the absolute first Memorandum initialization and no Memorandum exists in history/chat memory yet), you MUST output the full Memorandum document.
+## Memorandum Output Mode (Full Document — First Initialization)
+No previous Memorandum exists. You MUST output the complete, full Memorandum document.
 
-### Option A: Full Document (First Time Only)
+### CRITICAL: This is NOT a Chat Response
+- **Do NOT reply to or answer any \`CHAT USER\` message.** You are not having a conversation.
+- **Do NOT start with greetings, acknowledgments, or filler** ("Here is the memorandum", "Based on our discussion", etc.).
+- Your ONLY job is to read the full conversation, identify ALL agreed-upon decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan, and synthesize them into a structured Memorandum document.
+
+### Full Document Contract
 - Output the complete Memorandum content as plain markdown.
 - Do NOT wrap it in a diff block or code block.
 - Do NOT add \`+\` prefixes.
 - This will be pasted directly into the blank Notion Memorandum page.
-
-### Option B: Git Diff (If Memorandum Already Exists in Memory/Context)
-- **Fenced Code Block ONLY**: The diff MUST be wrapped in a code block with the \`diff\` language tag:
-  \`\`\`diff
-  @@ -1,5 +1,7 @@
-   unchanged line
-  -removed line
-  +added line
-  +new line
-  \`\`\`
-- **Unified Diff Format**: Use \`-\` for removed, \`+\` for added, \` \` (space) for unchanged context lines.
-- **Context Lines**: Include at least 3 lines of unchanged context before/after each change.
-- **Table & Format Context (CRITICAL)**: If modifying a table, list, or code block, you MUST include the table headers, block boundaries, or surrounding items as context lines to ensure the structure is preserved. Never abruptly output \`+\` or \`-\` lines without surrounding structural markers.
-- **Formatting Integrity (CRITICAL)**: Context lines (starting with space \` \`) and removed lines (starting with \`-\`) MUST be character-for-character identical to the latest Memorandum, retaining all headings (\`#\`, \`##\`), bolding (\`**\`), list markers (\`-\`, \`*\`), inline code backticks, and table delimiters (\`|\`). Do NOT strip, simplify, or normalize markdown formatting.
-- **Code Blocks**: Always include opening/closing code fences (\`\`\`) as context lines when modifying code block contents.
-- **Tables**: Do not squash or flatten table grids. Maintain full \`|\` formatting.
-- **Accuracy**: The \`-\` lines must exactly match the content of the corresponding lines in the latest Memorandum entry.
-- **Scope**: Include only changed regions.
-- **No Full Document**: Do NOT output the full memorandum document. Output ONLY the diff code block.
+- Start IMMEDIATELY with the memorandum heading (e.g., \`# Memorandum: [Project Name]\`).
 
 ### Memorandum Content Rules
 Include: agreed decisions, constraints, architecture, schemas, glossaries, key algorithms, scope/plan.
@@ -523,7 +522,8 @@ async function buildXML(thoughtId: string, exportType: PageType | boolean = fals
   lines.push("<cogdex>");
   lines.push("");
   lines.push("<protocol>");
-  const hasMemorandum = hasMemoResp;
+  // A memorandum exists if we have actual content from either Memorandum DB or MEMO RESP/MEMO UPDT entries
+  const hasMemorandum = memorandumContentObj != null || hasMemoResp;
   lines.push(getDefaultProtocol(exportType, hasMemorandum));
   if (promptContents.length > 0) {
     lines.push("");
