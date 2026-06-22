@@ -521,62 +521,237 @@ export function unwrapCodeFences(text: string): string {
     trimmed = trimmed.slice(1, -1).trim();
   }
 
+  // 0. Fast-path: if the text already starts with a raw @@ hunk header it has
+  //    already been unwrapped (e.g. by a prior call to this function or by the
+  //    test harness). Return immediately to avoid mis-detecting ``` context lines
+  //    inside the diff as code-fence delimiters.
+  if (/^@@\s+-\d+/.test(trimmed)) {
+    return trimmed;
+  }
+
   // 1. If the entire string is a code fence, unwrap it.
   const exactMatch = trimmed.match(/^`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}$/);
   if (exactMatch) {
     return exactMatch[1];
   }
 
-  // 2. If there is conversational text but it contains a diff inside a code block, extract the diff.
+  // 2. If the text contains a diff inside a code block, extract it — then also collect any
+  //    raw @@ hunk blocks that appear OUTSIDE the fence (common LLM output pattern where the
+  //    model emits extra hunks as prose after closing the ```diff fence).
   const partialMatch = trimmed.match(/`{3,}(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n`{3,}/);
   if (partialMatch && isDiff(partialMatch[1])) {
-    return partialMatch[1];
+    const fencedDiff = partialMatch[1];
+    // Collect raw @@ hunks that appear after the code fence closes.
+    const afterFence = trimmed.slice(partialMatch.index! + partialMatch[0].length);
+    const extraHunks = extractRawHunkBlocks(afterFence);
+    if (extraHunks.length > 0) {
+      return fencedDiff + "\n" + extraHunks.join("\n");
+    }
+    return fencedDiff;
   }
 
-  // 3. Otherwise, return the original text (preserves full documents containing code blocks).
+  // 3. If the whole text (no fence) contains raw @@ hunks, return as-is so parseDiff can handle it.
+  if (isDiff(trimmed)) {
+    return trimmed;
+  }
+
+  // 4. Otherwise return the original text (preserves full documents containing code blocks).
   return trimmed;
+}
+
+/**
+ * Extract raw @@ hunk blocks from prose text (text that is NOT inside a code fence).
+ * LLMs sometimes emit hunks as plain text after closing a ```diff block.
+ * Returns an array of raw hunk text strings (each starting with @@).
+ *
+ * IMPORTANT: code fences that appear INSIDE an active hunk are kept as part of
+ * the hunk (they are diff context lines), not treated as fence boundaries.
+ */
+function extractRawHunkBlocks(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const result: string[] = [];
+  let current: string[] | null = null;
+  let inCodeFence = false;
+  let fenceChar = "";
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    // Track code fences, but only when we are NOT inside an active hunk.
+    // Inside a hunk the fence is diff context (e.g. an ENV variable block).
+    const fenceMatch = trimmedLine.match(/^(`{3,})/);
+    if (fenceMatch && current === null) {
+      // Outside a hunk — fence is a literal code example, skip its contents.
+      if (!inCodeFence) {
+        inCodeFence = true;
+        fenceChar = fenceMatch[1];
+      } else if (trimmedLine.startsWith(fenceChar)) {
+        inCodeFence = false;
+        fenceChar = "";
+      }
+      continue;
+    }
+
+    if (inCodeFence && current === null) continue;
+
+    const hunkHeader = line.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/);
+    if (hunkHeader) {
+      if (current !== null) {
+        result.push(current.join("\n"));
+      }
+      current = [line];
+    } else if (current !== null) {
+      current.push(line);
+    }
+  }
+
+  if (current !== null && current.length > 0) {
+    result.push(current.join("\n"));
+  }
+
+  return result;
+}
+
+/**
+ * Normalise a single raw diff line that an LLM may have garbled.
+ *
+ * LLMs commonly produce these malformed patterns (checked before the
+ * standard prefix guard so they are caught first):
+ *   "  +content"      — leading whitespace then `+`  → addition
+ *   "- +content"      — markdown list-bullet then `+` → addition
+ *   "## +content"     — heading marker then `+`      → addition
+ *
+ * Lines that already carry an unambiguous standard prefix (+/-/space/\)
+ * and do NOT match a compound pattern are returned unchanged.
+ */
+function normalizeDiffLine(line: string): string {
+  if (line === "" || line.startsWith("\\")) return line;
+
+  // "  +content" or "\t+content" — leading whitespace then `+` (must check BEFORE early return)
+  const indentedAdd = line.match(/^[ \t]+(\+.*)$/);
+  if (indentedAdd) return indentedAdd[1];
+
+  // "- +content" or "* +content" — markdown list bullet, then `+`
+  const bulletAdd = line.match(/^[-*]\s+(\+.*)$/);
+  if (bulletAdd) return bulletAdd[1];
+
+  // "## +content", "### +content", etc. — heading marker then `+`
+  const headingAdd = line.match(/^#{1,6}\s*(\+.*)$/);
+  if (headingAdd) return headingAdd[1];
+
+  // Already has a valid diff prefix — return as-is.
+  if (/^[+\- ]/.test(line)) return line;
+
+  return line;
 }
 
 export function parseDiff(diffText: string): Hunk[] {
   const content = unwrapCodeFences(diffText);
   const lines = content.split(/\r?\n/);
   const hunks: Hunk[] = [];
-  let currentHunk: Hunk | null = null;
+
+  // ── Two-pass approach ────────────────────────────────────────────────────
+  // Pass 1: split raw lines into per-hunk buckets (with header metadata).
+  // Pass 2: normalize each line and apply the removal-budget guard using the
+  //         *pre-computed* expected removal count so we don't misclassify
+  //         markdown list items (which start with "- ") as diff removals.
+
+  interface RawHunk {
+    oldStart: number;
+    oldLength: number;
+    newStart: number;
+    newLength: number;
+    rawLines: string[];
+  }
+
+  const rawHunks: RawHunk[] = [];
+  let currentRaw: RawHunk | null = null;
 
   for (const line of lines) {
-    const hunkHeaderMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
-    if (hunkHeaderMatch) {
-      if (currentHunk) {
-        while (currentHunk.lines.length > 0 && currentHunk.lines[currentHunk.lines.length - 1].trim() === "") {
-          currentHunk.lines.pop();
+    const m = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+    if (m) {
+      if (currentRaw) {
+        // Trim trailing blank lines
+        while (currentRaw.rawLines.length > 0 && currentRaw.rawLines[currentRaw.rawLines.length - 1].trim() === "") {
+          currentRaw.rawLines.pop();
         }
-        hunks.push(currentHunk);
+        rawHunks.push(currentRaw);
       }
-      currentHunk = {
-        oldStart: parseInt(hunkHeaderMatch[1], 10),
-        oldLength: hunkHeaderMatch[2] ? parseInt(hunkHeaderMatch[2], 10) : 1,
-        newStart: parseInt(hunkHeaderMatch[3], 10),
-        newLength: hunkHeaderMatch[4] ? parseInt(hunkHeaderMatch[4], 10) : 1,
-        lines: [],
+      currentRaw = {
+        oldStart:  parseInt(m[1], 10),
+        oldLength: m[2] ? parseInt(m[2], 10) : 1,
+        newStart:  parseInt(m[3], 10),
+        newLength: m[4] ? parseInt(m[4], 10) : 1,
+        rawLines: [],
       };
-    } else if (currentHunk) {
-      if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line === "" || line.startsWith("\\")) {
-        currentHunk.lines.push(line);
+    } else if (currentRaw) {
+      currentRaw.rawLines.push(line);
+    }
+  }
+  if (currentRaw) {
+    while (currentRaw.rawLines.length > 0 && currentRaw.rawLines[currentRaw.rawLines.length - 1].trim() === "") {
+      currentRaw.rawLines.pop();
+    }
+    rawHunks.push(currentRaw);
+  }
+
+  // Pass 2: normalize lines and build the final Hunk objects.
+  for (const raw of rawHunks) {
+    // Pre-count addition lines in the raw hunk to compute expectedRemovals.
+    const additionsCount = raw.rawLines.filter(l => {
+      const n = normalizeDiffLine(l);
+      return n.startsWith("+");
+    }).length;
+    // expected_removals = max(0, oldLength - newLength + additions)
+    // Context-promotion of "- list item" lines (treating them as context rather than
+    // removals) is applied ONLY when the hunk is clearly net-additive: newLength >= 1.5x
+    // oldLength. For hunks with similar sizes the "-" prefix is more likely a genuine
+    // removal and we trust it as such.
+    const rawExpected = raw.oldLength - raw.newLength + additionsCount;
+    const isNetAdditive = raw.oldLength > 0 && (raw.newLength / raw.oldLength) >= 1.5;
+    const expectedRemovals = (rawExpected <= 0 && isNetAdditive) ? 0 : Math.max(0, rawExpected);
+
+    const hunk: Hunk = {
+      oldStart:  raw.oldStart,
+      oldLength: raw.oldLength,
+      newStart:  raw.newStart,
+      newLength: raw.newLength,
+      lines: [],
+    };
+
+    for (const line of raw.rawLines) {
+      const normalized = normalizeDiffLine(line);
+      if (normalized.startsWith("+") || normalized.startsWith("-") || normalized.startsWith(" ") || normalized === "" || normalized.startsWith("\\")) {
+        // Guard: a "-" line that looks like a markdown list item ("- text") is
+        // ambiguous. Demote it to a context line once the removal budget is
+        // exhausted (budget = expectedRemovals, not oldLength).
+        if (normalized.startsWith("-") && /^-\s+\S/.test(normalized)) {
+          const removalsUsed = hunk.lines.filter(l => l.startsWith("-")).length;
+          if (removalsUsed >= expectedRemovals) {
+            // Budget exhausted — treat as context.
+            hunk.lines.push(" " + normalized.slice(1));
+            continue;
+          }
+        }
+        hunk.lines.push(normalized);
       } else {
         if (!line.startsWith("diff ") && !line.startsWith("--- ") && !line.startsWith("+++ ")) {
-          currentHunk.lines.push(" " + line);
+          hunk.lines.push(" " + line);
         }
       }
     }
-  }
-  if (currentHunk) {
-    while (currentHunk.lines.length > 0 && currentHunk.lines[currentHunk.lines.length - 1].trim() === "") {
-      currentHunk.lines.pop();
+
+    // Trim trailing blank lines
+    while (hunk.lines.length > 0 && hunk.lines[hunk.lines.length - 1].trim() === "") {
+      hunk.lines.pop();
     }
-    hunks.push(currentHunk);
+    hunks.push(hunk);
   }
+
   return hunks;
 }
+
+
 
 // Code fence lines — must be handled transparently when LLMs omit them from diff context.
 // They are skipped when matching prose lines and re-emitted in the output unchanged.
