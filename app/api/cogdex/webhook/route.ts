@@ -212,11 +212,19 @@ export async function POST(req: NextRequest) {
         return Response.json({ error: `Only GitHub URLs are supported for REPO SNAP. Got: ${repoUrl}` }, { status: 400 });
       }
 
+      const shaHeaders: Record<string, string> = {
+        "Accept": "application/vnd.github.sha",
+        "User-Agent": "cogdex-app",
+      };
+      if (process.env.GITHUB_TOKEN) {
+        shaHeaders["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+      }
+
       let commitId = "";
       try {
         const ref = ghInfo.branch || "HEAD";
         const shaResponse = await fetch(`https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/commits/${ref}`, {
-          headers: { "Accept": "application/vnd.github.sha", "User-Agent": "cogdex-app" },
+          headers: shaHeaders,
         });
         if (shaResponse.ok) {
           const sha = await shaResponse.text();
@@ -242,8 +250,16 @@ export async function POST(req: NextRequest) {
           // 1. Download tarball from GitHub API
           const ref = ghInfo.branch || "HEAD";
           const tarballUrl = `https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/tarball/${ref}`;
+          const tarHeaders: Record<string, string> = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "cogdex-app",
+          };
+          if (process.env.GITHUB_TOKEN) {
+            tarHeaders["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+          }
+
           const tarResponse = await fetch(tarballUrl, {
-            headers: { "Accept": "application/vnd.github+json", "User-Agent": "cogdex-app" },
+            headers: tarHeaders,
             redirect: "follow",
           });
           if (!tarResponse.ok) {
