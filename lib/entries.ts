@@ -2155,7 +2155,8 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
   const memorandumDbIdResolved = await resolveDataSourceId(MEMORANDUM_DB_ID);
   console.log(`[handleMemoUpdate] Resolved memorandumDbIdResolved: ${memorandumDbIdResolved}`);
 
-  // 1. Gather all entries of type "MEMO RESP" and "MEMO EXPO" for the project
+  // 1. Gather all MEMO RESP entries for the project.
+  // MEMO EXPO is outbound-only and must not participate in memorandum reconstruction.
   const entriesResponse = await notion.dataSources.query({
     data_source_id: entryDbId,
     filter: {
@@ -2167,7 +2168,7 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
 
   const memorandumEntries = entriesResponse.results.filter((entry: any) => {
     const type = findProperty(entry.properties || {}, "Type")?.select?.name;
-    return type === "MEMO RESP" || type === "MEMO EXPO";
+    return type === "MEMO RESP";
   });
   console.log(`[handleMemoUpdate] Filtered to ${memorandumEntries.length} memorandum entries`);
 
@@ -2204,28 +2205,21 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
       latestEntryNumber = entryNum;
     }
 
-    const type = findProperty((entry as any).properties || {}, "Type")?.select?.name;
     const content = entryContents[i];
+    const unwrapped = unwrapCodeFences(content);
 
-    if (type === "MEMO EXPO") {
-      const match = content.match(/<entry\s+type="MEMO"\s+title="[^"]*">([\s\S]*)<\/entry>/);
-      if (match) {
-        currentContent = match[1].trim();
-        console.log(`[handleMemoUpdate] Extracted MEMO EXPO content. Length: ${currentContent.length}`);
-      } else {
-        warn(`[handleMemoUpdate] Could not match <entry type="MEMO"> in MEMO EXPO entry.`);
-      }
+    if (i === 0 && isDiff(unwrapped)) {
+      throw new Error("[handleMemoUpdate] First MEMO RESP must be full text, but received unified diff.");
+    }
+
+    if (isDiff(unwrapped)) {
+      console.log(`[handleMemoUpdate] Applying diff from MEMO RESP. Unwrapped length: ${unwrapped.length}`);
+      const patchedLines = applyPatch(currentContent, unwrapped);
+      currentContent = patchedLines.map(l => l.text).join("\n");
+      console.log(`[handleMemoUpdate] Finished applying patch. New content length: ${currentContent.length}`);
     } else {
-      const unwrapped = unwrapCodeFences(content);
-      if (isDiff(unwrapped)) {
-        console.log(`[handleMemoUpdate] Applying diff from MEMO RESP. Unwrapped length: ${unwrapped.length}`);
-        const patchedLines = applyPatch(currentContent, unwrapped);
-        currentContent = patchedLines.map(l => l.text).join("\n");
-        console.log(`[handleMemoUpdate] Finished applying patch. New content length: ${currentContent.length}`);
-      } else {
-        console.log(`[handleMemoUpdate] Not a diff. Replacing content entirely.`);
-        currentContent = unwrapped;
-      }
+      console.log(`[handleMemoUpdate] Using full text from MEMO RESP.`);
+      currentContent = unwrapped;
     }
   }
 
@@ -3080,4 +3074,3 @@ function findPropertyKey(properties: Record<string, any>, possibilities: string[
   }
   return undefined;
 }
-

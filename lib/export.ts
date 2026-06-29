@@ -420,7 +420,7 @@ async function getMemorandumContent(thoughtId: string, latestMemorandumPage: Not
 
   const memorandumEntries = (response.results as unknown as NotionPage[]).filter((entry) => {
     const type = entry.properties?.Type?.select?.name;
-    return type === "MEMO RESP" || type === "MEMO EXPO" || type === "MEMO UPDT";
+    return type === "MEMO RESP";
   });
 
   if (memorandumEntries.length === 0) {
@@ -447,22 +447,18 @@ async function getMemorandumContent(thoughtId: string, latestMemorandumPage: Not
     const name = entry.properties?.Name?.title?.[0]?.plain_text ?? entry.properties?.Title?.title?.[0]?.plain_text ?? "";
     if (name) latestTitle = name;
 
-    const type = entry.properties?.Type?.select?.name;
     const content = entryContents[i];
+    const unwrapped = unwrapCodeFences(content);
 
-    if (type === "MEMO EXPO") {
-      const match = content.match(/<entry\s+type="MEMO"\s+title="[^"]*">([\s\S]*)<\/entry>/);
-      if (match) {
-        currentContent = match[1].trim();
-      }
+    if (i === 0 && isDiff(unwrapped)) {
+      throw new Error("[getMemorandumContent] First MEMO RESP must be full text, but received unified diff.");
+    }
+
+    if (isDiff(unwrapped)) {
+      const patchedLines = applyPatch(currentContent, unwrapped);
+      currentContent = patchedLines.map(l => l.text).join("\n");
     } else {
-      const unwrapped = unwrapCodeFences(content);
-      if (isDiff(unwrapped)) {
-        const patchedLines = applyPatch(currentContent, unwrapped);
-        currentContent = patchedLines.map(l => l.text).join("\n");
-      } else {
-        currentContent = unwrapped;
-      }
+      currentContent = unwrapped;
     }
   }
 
