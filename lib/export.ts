@@ -190,7 +190,7 @@ export async function readPageContent(pageId: string): Promise<string> {
     }
   }
 
-  return lines.join("\n");
+  return lines.join("\n\n");
 }
 
 // Fetch all Include=true entries for a project, excluding Compile

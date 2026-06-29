@@ -1630,7 +1630,19 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
     const isTableLine = trimmedText.startsWith("|");
 
     if (inTable) {
-      if (trimmedText.startsWith("|") || isTableContinuation(line.text, tableLines)) {
+      const isStructuralLine = 
+        trimmedText.startsWith("```") ||
+        trimmedText.startsWith(">") ||
+        /^(#{1,6})\s+/.test(trimmedText) ||
+        /^(-{3,}|\*{3,}|_{3,})$/.test(trimmedText) ||
+        /^\s*[-+*]\s+/.test(line.text) ||
+        /^\s*\d+\.\s+/.test(line.text);
+
+      if (isStructuralLine) {
+        blocks.push(buildTableBlock(tableLines));
+        inTable = false;
+        tableLines = [];
+      } else if (trimmedText.startsWith("|") || isTableContinuation(line.text, tableLines)) {
         tableLines.push(line);
         continue;
       } else {
@@ -2272,7 +2284,7 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
   }
 
   // 5. Rebuild memorandum page from the fully patched markdown.
-  const forceWipe = true;
+  const forceWipe = false;
   console.log(`[handleMemoUpdate] Rebuilding memorandum page: ${memorandumPageId} with content length: ${currentContent.length}`);
   await updatePageBlocks(memorandumPageId, currentContent, false, forceWipe);
   console.log(`[handleMemoUpdate] Finished updating memorandum page ${memorandumPageId} with latest content (forceWipe: ${forceWipe})`);
@@ -2621,8 +2633,8 @@ export async function updatePageBlocks(
   });
   const isCompletelyDifferent = similarityRatio < 0.3;
   
-  if (forceWipe || hasTableStructuralChange || (isCompletelyDifferent && oldSerialized.length > 0)) {
-    debug(`Wiping and replacing blocks. similarity=${similarityRatio.toFixed(2)}, forceWipe=${forceWipe}, tableStructuralChange=${hasTableStructuralChange}`);
+  if (forceWipe || (isCompletelyDifferent && oldSerialized.length > 0)) {
+    debug(`Wiping and replacing blocks. similarity=${similarityRatio.toFixed(2)}, forceWipe=${forceWipe}`);
     
     let manualWipeNeeded = true;
     if (!keepFirstBlock) {
