@@ -375,29 +375,9 @@ export async function POST(req: NextRequest) {
       try {
         const repomixOutput = await Promise.race([repomixPromise(), timeoutPromise]);
 
-        const successCallout = {
-          object: "block",
-          type: "callout",
-          callout: {
-            rich_text: [
-              {
-                type: "text",
-                text: {
-                  content: `Success: REPO SNAP completed successfully.${commitId ? ` Commit: ${commitId}.` : ""}`,
-                },
-              },
-            ],
-            icon: {
-              type: "emoji",
-              emoji: "🪩",
-            },
-            color: "green_background",
-          },
-        };
-
         const blocks = compileRepomixToCodeBlocks(repomixOutput);
         
-        let batch: any[] = [successCallout];
+        let batch: any[] = [];
         let batchChars = 0;
         const MAX_BATCH_CHARS = 100000;
         const MAX_BATCH_BLOCKS = 100;
@@ -431,6 +411,34 @@ export async function POST(req: NextRequest) {
             children: batch as any,
           });
         }
+
+        const successCallout = {
+          object: "block",
+          type: "callout",
+          callout: {
+            rich_text: [
+              {
+                type: "text",
+                text: {
+                  content: `Success: REPO SNAP completed successfully.${commitId ? ` Commit: ${commitId}.` : ""}`,
+                },
+              },
+            ],
+            icon: {
+              type: "emoji",
+              emoji: "🪩",
+            },
+            color: "green_background",
+          },
+        };
+
+        await notion.blocks.children.append({
+          block_id: activeEntryId,
+          position: {
+            type: "start",
+          },
+          children: [successCallout] as any,
+        });
 
         return Response.json({ ok: true });
 
