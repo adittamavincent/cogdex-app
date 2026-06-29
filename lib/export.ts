@@ -391,8 +391,24 @@ Produce a regular response entry answering the user's intent.
   }
 }
 
-// Fetch the latest memorandum content, falling back to reconstructing from Entries DB if Memorandum DB doesn't have it.
+// Fetch canonical memorandum content.
+// Prefer latest Memorandum page because it is already the ground-truth materialized state.
+// Reconstructing from historical diffs is only a fallback when that page is unavailable/empty.
 async function getMemorandumContent(thoughtId: string, latestMemorandumPage: NotionPage | null): Promise<{ content: string; title: string } | null> {
+  if (latestMemorandumPage) {
+    try {
+      const liveContent = await readPageContent(latestMemorandumPage.id);
+      if (liveContent.trim()) {
+        const liveTitle = latestMemorandumPage.properties?.Name?.title?.[0]?.plain_text
+          ?? latestMemorandumPage.properties?.Title?.title?.[0]?.plain_text
+          ?? "Memorandum";
+        return { content: liveContent, title: liveTitle };
+      }
+    } catch (err) {
+      console.warn("[getMemorandumContent] Failed to read latest Memorandum page, falling back to entry replay.", err);
+    }
+  }
+
   const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
   const response = await notion.dataSources.query({
     data_source_id: entryDbId,
