@@ -2208,7 +2208,7 @@ export async function handleMemoUpdate(thoughtId: string): Promise<void> {
     const content = entryContents[i];
 
     if (type === "MEMO EXPO") {
-      const match = content.match(/<entry\s+type="MEMO"\s+title="[^"]*">([\s\S]*?)<\/entry>/);
+      const match = content.match(/<entry\s+type="MEMO"\s+title="[^"]*">([\s\S]*)<\/entry>/);
       if (match) {
         currentContent = match[1].trim();
         console.log(`[handleMemoUpdate] Extracted MEMO EXPO content. Length: ${currentContent.length}`);
