@@ -1764,7 +1764,7 @@ export function markdownToRichNotionBlocks(linesInput: string | Array<{ text: st
 
 export function compileRepomixToCodeBlocks(text: string): Record<string, unknown>[] {
   const blocks: Record<string, unknown>[] = [];
-  const maxChunkSize = 150000;
+  const maxChunkSize = 30000;
   let remaining = text;
   
   while (remaining.length > 0) {

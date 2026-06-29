@@ -198,6 +198,43 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // --- 1. Resolve activeEntryId first ---
+      let activeEntryId = entryId;
+      if (activeEntryId) {
+        await updateExistingEntryProperties({
+          entryId: activeEntryId,
+          projectId,
+          pageType: "REPO SNAP",
+          pageObj,
+        });
+      } else {
+        const { pageId } = await createEntry({ thoughtId: projectId, pageType: "REPO SNAP" });
+        activeEntryId = pageId;
+      }
+
+      if (!activeEntryId) {
+        return Response.json({ error: "Failed to create or find entry page" }, { status: 500 });
+      }
+
+      // --- 2. Clean existing blocks to write clean snapshot ---
+      try {
+        let hasMore = true;
+        let startCursor: string | undefined = undefined;
+        while (hasMore) {
+          const res: any = await notion.blocks.children.list({
+            block_id: activeEntryId,
+            start_cursor: startCursor,
+          });
+          for (const block of res.results) {
+            await notion.blocks.delete({ block_id: block.id }).catch(() => {});
+          }
+          hasMore = res.has_more;
+          startCursor = res.next_cursor || undefined;
+        }
+      } catch (err) {
+        console.error("Failed to clean blocks:", err);
+      }
+
       // Parse GitHub URL to owner/repo for tarball download
       const parseGitHub = (url: string): { owner: string; repo: string; branch?: string } | null => {
         const shorthand = url.match(/^([^/\s]+)\/([^/\s]+)$/);
@@ -209,19 +246,30 @@ export async function POST(req: NextRequest) {
 
       const ghInfo = parseGitHub(repoUrl);
       if (!ghInfo) {
+        await notion.blocks.children.append({
+          block_id: activeEntryId,
+          children: [{
+            object: "block",
+            type: "callout",
+            callout: {
+              rich_text: [{ type: "text", text: { content: `Only GitHub URLs are supported for REPO SNAP. Got: ${repoUrl}` } }],
+              icon: { type: "emoji", emoji: "❌" },
+              color: "red_background"
+            }
+          }] as any
+        });
         return Response.json({ error: `Only GitHub URLs are supported for REPO SNAP. Got: ${repoUrl}` }, { status: 400 });
-      }
-
-      const shaHeaders: Record<string, string> = {
-        "Accept": "application/vnd.github.sha",
-        "User-Agent": "cogdex-app",
-      };
-      if (process.env.GITHUB_TOKEN) {
-        shaHeaders["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
       }
 
       let commitId = "";
       try {
+        const shaHeaders: Record<string, string> = {
+          "Accept": "application/vnd.github.sha",
+          "User-Agent": "cogdex-app",
+        };
+        if (process.env.GITHUB_TOKEN) {
+          shaHeaders["Authorization"] = `Bearer ${process.env.GITHUB_TOKEN}`;
+        }
         const ref = ghInfo.branch || "HEAD";
         const shaResponse = await fetch(`https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/commits/${ref}`, {
           headers: shaHeaders,
@@ -233,6 +281,33 @@ export async function POST(req: NextRequest) {
       } catch (err) {
         console.error("Failed to fetch commit SHA:", err);
       }
+
+      let entryNumber = "";
+      try {
+        const entryPageObj = await notion.pages.retrieve({ page_id: activeEntryId }) as any;
+        const nameProp = findProperty(entryPageObj.properties || {}, "Name");
+        const currentName = nameProp?.title?.[0]?.plain_text ?? "";
+        if (/^\d+$/.test(currentName.trim())) {
+          entryNumber = currentName.trim();
+        } else {
+          const nextNum = await getNextEntryNumber(projectId);
+          entryNumber = String(nextNum);
+        }
+      } catch (err) {
+        console.error("Failed to retrieve entry page name:", err);
+      }
+
+      if (entryNumber) {
+        const finalTitle = commitId ? `${entryNumber} - ${commitId}` : entryNumber;
+        await notion.pages.update({
+          page_id: activeEntryId,
+          properties: {
+            Name: { title: [{ text: { content: finalTitle } }] }
+          }
+        });
+      }
+
+      await setExclusiveInclude(projectId, "REPO SNAP", activeEntryId);
 
       // Download tarball from GitHub API, extract locally, run repomix (no git binary needed)
       const repomixPromise = async () => {
@@ -247,7 +322,6 @@ export async function POST(req: NextRequest) {
         await fs.mkdir(tmpDir, { recursive: true });
 
         try {
-          // 1. Download tarball from GitHub API
           const ref = ghInfo.branch || "HEAD";
           const tarballUrl = `https://api.github.com/repos/${ghInfo.owner}/${ghInfo.repo}/tarball/${ref}`;
           const tarHeaders: Record<string, string> = {
@@ -266,7 +340,6 @@ export async function POST(req: NextRequest) {
             throw new Error(`GitHub tarball download failed: ${tarResponse.status} ${tarResponse.statusText}`);
           }
 
-          // 2. Write and extract tarball
           const tarPath = path.join(tmpDir, "repo.tar.gz");
           const buffer = Buffer.from(await tarResponse.arrayBuffer());
           await fs.writeFile(tarPath, buffer);
@@ -280,7 +353,6 @@ export async function POST(req: NextRequest) {
             strip: 1,
           });
 
-          // 3. Run repomix locally on extracted files (no --remote, no git needed)
           const tempFile = path.join(tmpDir, "repomix-output.txt");
           try {
             await runCli(['.'], extractDir, { output: tempFile, compress: true });
@@ -292,7 +364,6 @@ export async function POST(req: NextRequest) {
           const content = await fs.readFile(tempFile, "utf-8");
           return content;
         } finally {
-          // 4. Cleanup temp files
           await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         }
       };
@@ -301,73 +372,111 @@ export async function POST(req: NextRequest) {
         setTimeout(() => reject(new Error("Repomix timed out — try a smaller repo or scope with --include")), 45000)
       );
 
-      let repomixOutput: string;
       try {
-        repomixOutput = await Promise.race([repomixPromise(), timeoutPromise]);
-      } catch (err: any) {
-        if (err.message.includes("timed out")) {
-          return Response.json({ error: err.message }, { status: 504 });
-        }
-        throw err;
-      }
+        const repomixOutput = await Promise.race([repomixPromise(), timeoutPromise]);
 
-      repomixOutput += "\n\n😊";
+        const successCallout = {
+          object: "block",
+          type: "callout",
+          callout: {
+            rich_text: [
+              {
+                type: "text",
+                text: {
+                  content: `Success: REPO SNAP completed successfully.${commitId ? ` Commit: ${commitId}.` : ""}`,
+                },
+              },
+            ],
+            icon: {
+              type: "emoji",
+              emoji: "🪩",
+            },
+            color: "green_background",
+          },
+        };
 
-      let activeEntryId = entryId;
-      if (activeEntryId) {
-        await updateExistingEntryProperties({
-          entryId: activeEntryId,
-          projectId,
-          pageType: "REPO SNAP",
-          pageObj,
-        });
-      } else {
-        const { pageId } = await createEntry({ thoughtId: projectId, pageType: "REPO SNAP" });
-        activeEntryId = pageId;
-      }
+        const blocks = compileRepomixToCodeBlocks(repomixOutput);
+        
+        let batch: any[] = [successCallout];
+        let batchChars = 0;
+        const MAX_BATCH_CHARS = 100000;
+        const MAX_BATCH_BLOCKS = 100;
 
-      if (activeEntryId) {
-        let entryNumber = "";
-        try {
-          const entryPageObj = await notion.pages.retrieve({ page_id: activeEntryId }) as any;
-          const nameProp = findProperty(entryPageObj.properties || {}, "Name");
-          const currentName = nameProp?.title?.[0]?.plain_text ?? "";
-          if (/^\d+$/.test(currentName.trim())) {
-            entryNumber = currentName.trim();
-          } else {
-            const nextNum = await getNextEntryNumber(projectId);
-            entryNumber = String(nextNum);
+        for (const block of blocks) {
+          const codeBlock = block.code as any;
+          let blockChars = 0;
+          if (codeBlock && Array.isArray(codeBlock.rich_text)) {
+            for (const rt of codeBlock.rich_text) {
+              blockChars += (rt.text?.content?.length || 0);
+            }
           }
-        } catch (err) {
-          console.error("Failed to retrieve entry page name:", err);
+
+          if (batch.length > 0 && 
+              (batchChars + blockChars > MAX_BATCH_CHARS || batch.length >= MAX_BATCH_BLOCKS)) {
+            await notion.blocks.children.append({
+              block_id: activeEntryId,
+              children: batch as any,
+            });
+            batch = [];
+            batchChars = 0;
+          }
+
+          batch.push(block);
+          batchChars += blockChars;
+        }
+
+        if (batch.length > 0) {
+          await notion.blocks.children.append({
+            block_id: activeEntryId,
+            children: batch as any,
+          });
+        }
+
+        return Response.json({ ok: true });
+
+      } catch (err: any) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const failureCallout = {
+          object: "block",
+          type: "callout",
+          callout: {
+            rich_text: [
+              {
+                type: "text",
+                text: {
+                  content: `Error: REPO SNAP failed.\nDetails: ${errMsg}`,
+                },
+              },
+            ],
+            icon: {
+              type: "emoji",
+              emoji: "❌",
+            },
+            color: "red_background",
+          },
+        };
+
+        try {
+          await notion.blocks.children.append({
+            block_id: activeEntryId,
+            children: [failureCallout] as any,
+          });
+        } catch (appendErr) {
+          console.error("Failed to append failure notification to page:", appendErr);
         }
 
         if (entryNumber) {
-          const finalTitle = commitId ? `${entryNumber} - ${commitId}` : entryNumber;
           await notion.pages.update({
             page_id: activeEntryId,
             properties: {
-              Name: { title: [{ text: { content: finalTitle } }] }
+              Name: { title: [{ text: { content: `${entryNumber} - FAILED` } }] }
             }
-          });
+          }).catch(() => {});
         }
+
+        logError("Webhook REPO SNAP error:", err);
+        return Response.json({ error: errMsg }, { status: err.message?.includes("timed out") ? 504 : 500 });
       }
-
-      if (activeEntryId) {
-        await setExclusiveInclude(projectId, "REPO SNAP", activeEntryId);
-
-        // write output in chunks
-        const blocks = compileRepomixToCodeBlocks(repomixOutput);
-        const CHUNK = 100;
-        for (let i = 0; i < blocks.length; i += CHUNK) {
-          await notion.blocks.children.append({
-            block_id: activeEntryId,
-            children: blocks.slice(i, i + CHUNK) as any,
-          });
-        }
-      }
-
-      return Response.json({ ok: true });
     }
 
     if (entryId) {
