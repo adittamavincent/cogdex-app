@@ -163,8 +163,10 @@ Set the same variables in Vercel.
 
 | Header | Value | Purpose |
 |---|---|---|
-| `x-cogdex-secret` | your secret | authentication |
-| `x-cogdex-page-type` | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` / `CLEAR CHECKBOX` / `REF INCLUDE` / `SYST LINK` / `MEMO UPDT` / `REPO SNAP` / `TASK EXPO` / `TASK RESP` / `CHAT LINK` | action type |
+| `x-cogdex-secret` or `cogdex-secret` | your secret | authentication |
+| `x-cogdex-page-type` or `cogdex-page-type` | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` / `CLEAR CHECKBOX` / `REF INCLUDE` / `SYST LINK` / `MEMO UPDT` / `REPO SNAP` / `TASK EXPO` / `TASK RESP` / `CHAT LINK` | action type |
+
+The webhook also accepts the configured header names with or without the `x-` prefix. For auth it additionally accepts `Authorization: Bearer <secret>`.
 
 **Body:** Notion sends page details automatically:
 ```json
