@@ -517,6 +517,11 @@ interface Hunk {
 
 export function unwrapCodeFences(text: string): string {
   let trimmed = text.trim();
+  
+  const fenceCount = (trimmed.match(/^`{3,}/gm) || []).length;
+  if (fenceCount === 1) {
+    throw new Error("Diff is truncated (unclosed code fence).");
+  }
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
     trimmed = trimmed.slice(1, -1).trim();
   }
