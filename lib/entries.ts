@@ -406,6 +406,39 @@ export async function handleSystemLink(thoughtId: string): Promise<void> {
       configuration.properties.push(titleProp);
     }
 
+    const ensureVisibleProperty = (propertyNames: string[], width: number) => {
+      for (const propertyName of propertyNames) {
+        const dbPropKey = Object.keys(dbProperties).find(
+          (key) => key.toLowerCase().trim() === propertyName.toLowerCase()
+        );
+        if (!dbPropKey) continue;
+
+        const dbPropId = dbProperties[dbPropKey].id;
+        const existingProp = configuration.properties.find(
+          (p: any) =>
+            p.property_id === dbPropId ||
+            (p.property_name && p.property_name.toLowerCase().trim() === propertyName.toLowerCase())
+        );
+
+        if (existingProp) {
+          existingProp.visible = true;
+          existingProp.width = existingProp.width || width;
+        } else {
+          configuration.properties.push({
+            property_id: dbPropId,
+            property_name: dbPropKey,
+            visible: true,
+            width,
+          });
+        }
+      }
+    };
+
+    if (fallbackDataSourceId === ENTRY_DB_ID) {
+      // Keep Entry-DB action buttons visible even when the template view predates them.
+      ensureVisibleProperty(["Ref Include"], 120);
+    }
+
     for (const prop of configuration.properties) {
       const propId = prop.property_id;
       const propName = (prop.property_name || "").trim();

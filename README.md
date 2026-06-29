@@ -44,7 +44,7 @@ Buttons in Notion send webhooks to the Cogdex API, configured with a custom head
 | `REPO SNAP` | **Project Page** | Reads `REPO URL` from the Project row, downloads the GitHub codebase, compiles structure using repomix, and writes output as paragraphs of code blocks to a new `REPO SNAP` entry. |
 | `CHAT CMNT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
 | `CHAT LINK` | **Project/Entry Page** | Resolves a Notion URL from `CHAT URL`, links the current entry to the target Entry/Memorandum/Project, and clones target page blocks into the current entry. |
-| `CLEAR CHECKBOX` | **Project/Entry Page** | Unchecks `Include` on every Entry in the current project. |
+| `CLEAR CHECKBOX` | **Project Page** | Unchecks `Include` on every Entry in the current project. |
 | `REF INCLUDE` | **Entry Page** | Reads the row's `Entries Referenced` relation and snapshots project `Include` flags so only referenced entries remain checked. If relation is empty, nothing is changed. |
 | `SYST LINK` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Memorandum database views inside it based on template views, filtered to current Project. |
 
