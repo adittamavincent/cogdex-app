@@ -354,11 +354,16 @@ export async function POST(req: NextRequest) {
           });
 
           const tempFile = path.join(tmpDir, "repomix-output.txt");
+          const repomixOpts = {
+            output: tempFile,
+            compress: true,
+            ignore: "**/.qoder/**,**/scratch/**,**/.github/**,**/.idea/**,**/.vscode/**,**/.vs/**,**/.settings/**",
+          };
           try {
-            await runCli(['.'], extractDir, { output: tempFile, compress: true });
+            await runCli(['.'], extractDir, repomixOpts);
           } catch (err: any) {
             logError("Repomix with compress failed, falling back without compress:", err);
-            await runCli(['.'], extractDir, { output: tempFile, compress: false });
+            await runCli(['.'], extractDir, { ...repomixOpts, compress: false });
           }
 
           const content = await fs.readFile(tempFile, "utf-8");
