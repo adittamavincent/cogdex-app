@@ -41,9 +41,11 @@ Buttons in Notion send webhooks to the Cogdex API, configured with a custom head
 | `MEMO EXPO` | **Project Page** (As exporting endpoint) | Builds a memorandum-oriented export package for an external LLM. This is outbound context only and is not used to reconstruct the Memorandum later. |
 | `CHAT EXPO` | **Project Page** (As exporting endpoint) | Gathers `Include=true` context entries + included system prompts + latest live Memorandum. Exports a `<cogdex>` XML block and writes it to a `CHAT EXPO` entry. |
 | `TASK EXPO` | **Project Page** (As exporting endpoint) | Same as `CHAT EXPO`, but also includes the latest repository snapshot and switches protocol instructions to task-execution mode. |
-| `REPO SNAP` | **Project Page** | Downloads codebase from GitHub URL, compiles structure using repomix, and writes output as paragraphs of code blocks to a new `REPO SNAP` page in the **Entry** database. |
+| `REPO SNAP` | **Project Page** | Reads `REPO URL` from the Project row, downloads the GitHub codebase, compiles structure using repomix, and writes output as paragraphs of code blocks to a new `REPO SNAP` entry. |
 | `CHAT CMNT` | **Project/Entry Page** | Copies comments from previous entry, links references between two most recent entries. |
 | `CHAT LINK` | **Project/Entry Page** | Resolves a Notion URL from `CHAT URL`, links the current entry to the target Entry/Memorandum/Project, and clones target page blocks into the current entry. |
+| `CLEAR CHECKBOX` | **Project/Entry Page** | Unchecks `Include` on every Entry in the current project. |
+| `REF INCLUDE` | **Entry Page** | Reads the row's `Entries Referenced` relation and snapshots project `Include` flags so only referenced entries remain checked. If relation is empty, nothing is changed. |
 | `SYST LINK` | **Project Page** | Wipes current Project page blocks. Clones Entry, System Prompt, and Memorandum database views inside it based on template views, filtered to current Project. |
 
 ### Memorandum Rules
@@ -63,6 +65,7 @@ To sync properly with the codebase, configure these four databases in Notion:
 - `Name` (Title)
 - `Memorandum` (Relation → Memorandum DB, single select/limit to 1 page)
 - `CHAT URL` (URL or Rich Text, optional) — used by `CHAT LINK`
+- `REPO URL` (URL or Rich Text) — source repository used by `REPO SNAP`
 
 ### 2. Entry Database
 - `Name` (Title) — Stores the incremented entry number (e.g. `1`, `2`, `3`).
@@ -70,13 +73,13 @@ To sync properly with the codebase, configure these four databases in Notion:
 - `Include` (Checkbox) — Set to `true` to include an entry in chat/task context exports. Export/system/snapshot/task/memo-maintenance entry types are auto-unchecked by the app.
 - `Project` (Relation → Project DB)
 - `Entries Referenced` (Relation → Entry DB)
+- `Entries Referenced` can drive the `REF INCLUDE` action to snapshot which entries should stay included.
 - `System Prompt Used` (Relation → System Prompt DB)
 - `URL` / `CHAT URL` / similar link field (optional) — useful for `CHAT LINK`
 
 ### 3. Memorandum Database
 - `Name` (Title) — Holds latest chronological entry number.
 - `Project` (Relation → Project DB)
-- `Repo URL` (URL or Rich Text) — source repository used by `REPO SNAP`
 
 ### 4. System Prompt Database
 - `Name` (Title)
@@ -161,7 +164,7 @@ Set the same variables in Vercel.
 | Header | Value | Purpose |
 |---|---|---|
 | `x-cogdex-secret` | your secret | authentication |
-| `x-cogdex-page-type` | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` / `SYST LINK` / `MEMO UPDT` / `REPO SNAP` / `TASK EXPO` / `TASK RESP` / `CHAT LINK` | action type |
+| `x-cogdex-page-type` | `CHAT USER` / `CHAT RESP` / `MEMO EXPO` / `MEMO RESP` / `CHAT EXPO` / `CHAT CMNT` / `CLEAR CHECKBOX` / `REF INCLUDE` / `SYST LINK` / `MEMO UPDT` / `REPO SNAP` / `TASK EXPO` / `TASK RESP` / `CHAT LINK` | action type |
 
 **Body:** Notion sends page details automatically:
 ```json

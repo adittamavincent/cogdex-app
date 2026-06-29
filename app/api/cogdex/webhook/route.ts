@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import type { NotionAutomationPayload, PageType } from "@/lib/types";
 import { notion } from "@/lib/notion";
-import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, compileRepomixToCodeBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink, getNextEntryNumber } from "@/lib/entries";
+import { createEntry, handleSystemLink, handleUserComment, handleMemoUpdate, resolveDataSourceId, setExclusiveInclude, markdownToRichNotionBlocks, compileRepomixToCodeBlocks, findProperty, updateExistingEntryProperties, findRecentEmptyEntry, handleChatLink, getNextEntryNumber, clearProjectIncludes, applyReferencedIncludeSnapshot } from "@/lib/entries";
 import { exportAndCreate } from "@/lib/export";
 import { error as logError } from "@/lib/logger";
 
@@ -19,6 +19,8 @@ const VALID_PAGE_TYPES: PageType[] = [
   "MEMO RESP",
   "CHAT EXPO",
   "CHAT CMNT",
+  "CLEAR CHECKBOX",
+  "REF INCLUDE",
   "SYST LINK",
   "MEMO UPDT",
   "REPO SNAP",
@@ -163,6 +165,20 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true });
     }
 
+    if (pageType === "CLEAR CHECKBOX") {
+      const clearedCount = await clearProjectIncludes(projectId);
+      return Response.json({ ok: true, clearedCount });
+    }
+
+    if (pageType === "REF INCLUDE") {
+      if (!entryId) {
+        return Response.json({ error: "REF INCLUDE must be triggered from an Entry page." }, { status: 400 });
+      }
+
+      const result = await applyReferencedIncludeSnapshot(projectId, pageObj);
+      return Response.json({ ok: true, ...result });
+    }
+
 
 
     if (pageType === "MEMO UPDT") {
@@ -177,22 +193,14 @@ export async function POST(req: NextRequest) {
 
     if (pageType === "REPO SNAP") {
       const projectPage = await notion.pages.retrieve({ page_id: projectId }) as any;
-      const memorandumRelations = projectPage.properties?.Memorandum?.relation || [];
-      if (memorandumRelations.length === 0) {
-        return Response.json({ error: "No Memorandum entry linked to this project" }, { status: 400 });
-      }
-      
-      const memorandumId = memorandumRelations[0].id;
-      const memorandumPage = await notion.pages.retrieve({ page_id: memorandumId }) as any;
-      
-      const repoUrlProp = memorandumPage.properties?.["Repo URL"] || Object.values(memorandumPage.properties || {}).find((p: any) => p.id === "ySdk");
+      const projectTitle = projectPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
+      const repoUrlProp = findProperty(projectPage.properties || {}, "REPO URL");
       const repoUrl = repoUrlProp?.rich_text?.[0]?.plain_text || repoUrlProp?.url;
       
       if (!repoUrl) {
-        const memorandumTitle = memorandumPage.properties?.Name?.title?.[0]?.plain_text || "Untitled";
         return Response.json(
           {
-            error: `No Repo URL set on Memorandum page "${memorandumTitle}". Go to ${memorandumPage.url} and fill in the "Repo URL" property.`,
+            error: `No REPO URL set on Project page "${projectTitle}". Fill in the "REPO URL" property on the project row.`,
           },
           { status: 400 }
         );
@@ -510,5 +518,3 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: message }, { status: 500 });
   }
 }
-
-

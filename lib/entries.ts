@@ -59,6 +59,8 @@ const TEMPLATES: Record<PageType, string> = {
   "MEMO RESP": "",
   "CHAT EXPO": "",
   "CHAT CMNT": "",
+  "CLEAR CHECKBOX": "",
+  "REF INCLUDE": "",
   "SYST LINK": "",
   "MEMO UPDT": "",
   "REPO SNAP": "",
@@ -2816,6 +2818,92 @@ export async function setExclusiveInclude(projectId: string, entryType: string, 
       }
     });
   }
+}
+
+export async function clearProjectIncludes(projectId: string): Promise<number> {
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const entries: NotionPage[] = [];
+  let hasMore = true;
+  let startCursor: string | undefined;
+
+  while (hasMore) {
+    const response = await notion.dataSources.query({
+      data_source_id: entryDbId,
+      filter: {
+        and: [
+          { property: "Project", relation: { contains: projectId } },
+          { property: "Include", checkbox: { equals: true } }
+        ]
+      },
+      start_cursor: startCursor,
+    });
+
+    entries.push(...(response.results as unknown as NotionPage[]));
+    hasMore = response.has_more;
+    startCursor = response.next_cursor ?? undefined;
+  }
+
+  for (const entry of entries) {
+    await notion.pages.update({
+      page_id: entry.id,
+      properties: {
+        Include: { checkbox: false }
+      }
+    });
+  }
+
+  return entries.length;
+}
+
+export async function applyReferencedIncludeSnapshot(projectId: string, sourceEntryPage: any): Promise<{ referencedCount: number; updatedCount: number; skipped: boolean }> {
+  const referencedRelations = findProperty(sourceEntryPage.properties || {}, "Entries Referenced")?.relation || [];
+  const referencedIds = referencedRelations.map((rel: { id: string }) => rel.id).filter(Boolean);
+
+  if (referencedIds.length === 0) {
+    return { referencedCount: 0, updatedCount: 0, skipped: true };
+  }
+
+  const referencedIdSet = new Set(referencedIds);
+  const entryDbId = await resolveDataSourceId(ENTRY_DB_ID);
+  const projectEntries: NotionPage[] = [];
+  let hasMore = true;
+  let startCursor: string | undefined;
+
+  while (hasMore) {
+    const response = await notion.dataSources.query({
+      data_source_id: entryDbId,
+      filter: {
+        property: "Project",
+        relation: { contains: projectId }
+      },
+      start_cursor: startCursor,
+    });
+
+    projectEntries.push(...(response.results as unknown as NotionPage[]));
+    hasMore = response.has_more;
+    startCursor = response.next_cursor ?? undefined;
+  }
+
+  let updatedCount = 0;
+
+  for (const entry of projectEntries) {
+    const shouldInclude = referencedIdSet.has(entry.id);
+    const currentInclude = findProperty(entry.properties || {}, "Include")?.checkbox ?? false;
+
+    if (currentInclude === shouldInclude) {
+      continue;
+    }
+
+    await notion.pages.update({
+      page_id: entry.id,
+      properties: {
+        Include: { checkbox: shouldInclude }
+      }
+    });
+    updatedCount++;
+  }
+
+  return { referencedCount: referencedIds.length, updatedCount, skipped: false };
 }
 
 export async function handleChatLink(projectId: string, entryId: string | undefined, pageObj: any) {

@@ -5,6 +5,8 @@ export type PageType =
   | "MEMO RESP"
   | "CHAT EXPO"
   | "CHAT CMNT"
+  | "CLEAR CHECKBOX"
+  | "REF INCLUDE"
   | "SYST LINK"
   | "MEMO UPDT"
   | "REPO SNAP"
