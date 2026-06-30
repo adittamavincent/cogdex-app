@@ -17,13 +17,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Run Repomix
-        env:
-          COGDEX_REPO_URL: ${{ secrets.COGDEX_REPO_URL || vars.COGDEX_REPO_URL }}
-        run: |
-          REMOTE_URL="${COGDEX_REPO_URL:-${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}}"
-          npx repomix --compress --remote "$REMOTE_URL"
-
       - name: Trigger Webhook
         env:
           COGDEX_WEBHOOK_SECRET: ${{ secrets.COGDEX_WEBHOOK_SECRET }}
