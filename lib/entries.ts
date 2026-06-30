@@ -2973,12 +2973,15 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
 
   // 2. Extract target page ID from CHAT URL
   let targetBlocks: any[] = [];
+  let fallbackMarkdown: string | null = null;
+  let finalPageObjForFallback: any | null = null;
+  let finalTargetPageIdForFallback: string | null = null;
+  let appendedAnyBlocks = false;
   const targetPageId = extractNotionPageId(chatUrl);
   if (targetPageId) {
     try {
       let finalTargetPageId = targetPageId;
-      let targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
-      console.log("[handleChatLink] targetPageObj properties:", JSON.stringify(targetPageObj.properties, null, 2));
+      const targetPageObj = await notion.pages.retrieve({ page_id: targetPageId }) as any;
       const parent = targetPageObj.parent;
       const parentId = parent?.database_id || parent?.data_source_id;
       if (parentId) {
@@ -3000,16 +3003,6 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
           isEntry = (resolvedParentId === resolvedEntryDbId) || (parentId === ENTRY_DB_ID);
         }
 
-        console.log("[handleChatLink] classification check:", {
-          parentId,
-          resolvedParentId,
-          isMemo,
-          isEntry,
-          hasTypeProp,
-          hasRepoUrlProp,
-          hasChatUrlProp
-        });
-
         if (isMemo) {
           // It's a Memorandum! Link via Memorandum relation
           const memoPropKey = findPropertyKey(entryPage.properties || {}, ["Memorandum", "Memo"]);
@@ -3028,7 +3021,6 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
           // Project page! Link via its Memorandum relation
           const memoRelations = targetPageObj.properties?.Memorandum?.relation || 
                               findProperty(targetPageObj.properties || {}, "Memorandum")?.relation || [];
-          console.log("[handleChatLink] Project page detected. memoRelations:", JSON.stringify(memoRelations, null, 2));
           if (memoRelations.length > 0) {
             const memoId = memoRelations[0].id;
             finalTargetPageId = memoId;
@@ -3045,16 +3037,32 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
 
       // Fetch all blocks from the target page to clone them
       const finalPageObj = await notion.pages.retrieve({ page_id: finalTargetPageId }) as any;
-      const finalPageTitle = finalPageObj.properties?.Name?.title?.[0]?.plain_text ?? finalPageObj.properties?.Title?.title?.[0]?.plain_text ?? "Untitled";
-      console.log("[handleChatLink] finalTargetPageId:", finalTargetPageId, "Title:", finalPageTitle);
+      finalPageObjForFallback = finalPageObj;
+      finalTargetPageIdForFallback = finalTargetPageId;
 
       targetBlocks = await fetchBlocksRecursive(finalTargetPageId);
-      if (targetBlocks.length > 0) {
-        console.log("[handleChatLink] First block content details:", JSON.stringify(targetBlocks[0], null, 2));
+      if (targetBlocks.length === 0) {
+        fallbackMarkdown = buildLinkedPageSummaryMarkdown({
+          sourceUrl: chatUrl,
+          targetPageId: targetPageId,
+          resolvedPageId: finalTargetPageId,
+          pageObj: finalPageObj
+        });
       }
     } catch (err) {
       warn(`Failed to resolve or link target page from CHAT URL ${chatUrl}:`, err);
+      fallbackMarkdown = buildLinkedPageFailureMarkdown({
+        sourceUrl: chatUrl,
+        targetPageId,
+        error: err
+      });
     }
+  } else if (chatUrl) {
+    fallbackMarkdown = buildLinkedPageFailureMarkdown({
+      sourceUrl: chatUrl,
+      targetPageId: null,
+      error: new Error("CHAT URL does not contain a Notion page ID")
+    });
   }
 
   // 3. Sequential numbering name update
@@ -3072,9 +3080,7 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
 
   // Append cloned blocks if there are any
   if (targetBlocks.length > 0) {
-    console.log("[handleChatLink] Target blocks fetched:", targetBlocks.length, "types:", targetBlocks.map(b => b.type));
     const blocksToAppend = targetBlocks.map(cleanBlockForAppend).filter(Boolean);
-    console.log("[handleChatLink] Blocks to append clean:", blocksToAppend.length, "types:", blocksToAppend.map(b => b.type));
     if (blocksToAppend.length > 0) {
       const CHUNK = 100;
       for (let i = 0; i < blocksToAppend.length; i += CHUNK) {
@@ -3083,11 +3089,153 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
           children: blocksToAppend.slice(i, i + CHUNK),
         });
       }
+      appendedAnyBlocks = true;
       debug(`Copied ${blocksToAppend.length} blocks from target page ${targetPageId} to entry ${entryId}`);
+    } else if (!fallbackMarkdown && finalPageObjForFallback && finalTargetPageIdForFallback) {
+      fallbackMarkdown = buildLinkedPageSummaryMarkdown({
+        sourceUrl: chatUrl,
+        targetPageId: targetPageId,
+        resolvedPageId: finalTargetPageIdForFallback,
+        pageObj: finalPageObjForFallback
+      });
+    }
+  }
+  if (!appendedAnyBlocks && fallbackMarkdown) {
+    const fallbackBlocks = markdownToRichNotionBlocks(fallbackMarkdown);
+    if (fallbackBlocks.length > 0) {
+      const CHUNK = 100;
+      for (let i = 0; i < fallbackBlocks.length; i += CHUNK) {
+        await notion.blocks.children.append({
+          block_id: entryId,
+          children: fallbackBlocks.slice(i, i + CHUNK) as any,
+        });
+      }
     }
   }
 
   debug(`Successfully finished handleChatLink for entry ${entryId}`);
+}
+
+function buildLinkedPageFailureMarkdown(input: { sourceUrl: string; targetPageId: string | null; error: unknown }): string {
+  const errMsg = input.error instanceof Error ? input.error.message : String(input.error);
+  const parts: string[] = [];
+  parts.push("# Linked Page");
+  parts.push(`- URL: ${input.sourceUrl}`);
+  if (input.targetPageId) {
+    parts.push(`- Page ID: ${input.targetPageId}`);
+  }
+  parts.push("");
+  parts.push("## Status");
+  parts.push(`- Could not fetch/clone page content.`);
+  parts.push(`- Error: ${errMsg}`);
+  return parts.join("\n");
+}
+
+function buildLinkedPageSummaryMarkdown(input: { sourceUrl: string; targetPageId: string | null; resolvedPageId: string; pageObj: any }): string {
+  const title = getNotionPageTitle(input.pageObj);
+  const parts: string[] = [];
+  parts.push("# Linked Page");
+  parts.push(`- URL: ${input.sourceUrl}`);
+  parts.push(`- Title: ${title}`);
+  if (input.targetPageId && input.resolvedPageId !== input.targetPageId) {
+    parts.push(`- Resolved Page ID: ${input.resolvedPageId}`);
+    parts.push(`- Original Page ID: ${input.targetPageId}`);
+  } else if (input.targetPageId) {
+    parts.push(`- Page ID: ${input.targetPageId}`);
+  } else {
+    parts.push(`- Page ID: ${input.resolvedPageId}`);
+  }
+
+  const props = input.pageObj?.properties || {};
+  const propLines = buildNotionPropertiesSummaryLines(props);
+  if (propLines.length > 0) {
+    parts.push("");
+    parts.push("## Properties");
+    parts.push(...propLines.map(l => `- ${l}`));
+  }
+  return parts.join("\n");
+}
+
+function getNotionPageTitle(pageObj: any): string {
+  const props = pageObj?.properties || {};
+  const keys = Object.keys(props);
+  const titleKey = keys.find(k => props[k]?.type === "title") || findPropertyKey(props, ["Name", "Title", "title"]);
+  if (!titleKey) return "Untitled";
+  const titleParts = props[titleKey]?.title;
+  const title = Array.isArray(titleParts) ? richTextToPlain(titleParts) : "";
+  return title.trim() || "Untitled";
+}
+
+function buildNotionPropertiesSummaryLines(properties: Record<string, any>): string[] {
+  const keys = Object.keys(properties || {});
+  const lines: string[] = [];
+  for (const key of keys) {
+    const prop = properties[key];
+    if (!prop || typeof prop !== "object") continue;
+    if (prop.type === "title") continue;
+    const text = notionPropertyToPlainText(prop);
+    if (!text) continue;
+    lines.push(`${key}: ${text}`);
+    if (lines.length >= 50) break;
+  }
+  return lines;
+}
+
+function notionPropertyToPlainText(prop: any): string {
+  const type = prop?.type;
+  if (!type) return "";
+  const val = prop[type];
+  if (val === null || val === undefined) return "";
+
+  if (type === "rich_text") return richTextToPlain(val);
+  if (type === "title") return richTextToPlain(val);
+  if (type === "url") return String(val || "");
+  if (type === "email") return String(val || "");
+  if (type === "phone_number") return String(val || "");
+  if (type === "number") return val === null ? "" : String(val);
+  if (type === "checkbox") return val ? "true" : "false";
+  if (type === "select") return val?.name ? String(val.name) : "";
+  if (type === "status") return val?.name ? String(val.name) : "";
+  if (type === "multi_select") return Array.isArray(val) ? val.map((v: any) => v?.name).filter(Boolean).join(", ") : "";
+  if (type === "date") return val?.start ? String(val.start) : "";
+  if (type === "people") return Array.isArray(val) ? val.map((p: any) => p?.name).filter(Boolean).join(", ") : "";
+  if (type === "files") return Array.isArray(val) ? val.map((f: any) => f?.name).filter(Boolean).join(", ") : "";
+  if (type === "relation") return Array.isArray(val) ? `${val.length} related` : "";
+  if (type === "created_time") return String(val || "");
+  if (type === "last_edited_time") return String(val || "");
+  if (type === "created_by") return val?.name ? String(val.name) : "";
+  if (type === "last_edited_by") return val?.name ? String(val.name) : "";
+
+  if (type === "formula") {
+    const formulaType = val?.type;
+    if (!formulaType) return "";
+    const formulaVal = val[formulaType];
+    if (formulaVal === null || formulaVal === undefined) return "";
+    if (formulaType === "string") return String(formulaVal);
+    if (formulaType === "number") return String(formulaVal);
+    if (formulaType === "boolean") return formulaVal ? "true" : "false";
+    if (formulaType === "date") return formulaVal?.start ? String(formulaVal.start) : "";
+    return "";
+  }
+
+  if (type === "rollup") {
+    const rollType = val?.type;
+    if (!rollType) return "";
+    if (rollType === "number") return val?.number === null ? "" : String(val.number);
+    if (rollType === "date") return val?.date?.start ? String(val.date.start) : "";
+    if (rollType === "array") return Array.isArray(val?.array) ? `${val.array.length} items` : "";
+    return "";
+  }
+
+  return "";
+}
+
+function richTextToPlain(richText: any[]): string {
+  if (!Array.isArray(richText)) return "";
+  return richText
+    .map(rt => rt?.plain_text ?? rt?.text?.content ?? "")
+    .filter(Boolean)
+    .join("");
 }
 
 function cleanBlockForAppend(block: any): any {
