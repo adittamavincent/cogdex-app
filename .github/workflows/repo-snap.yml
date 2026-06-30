@@ -19,9 +19,10 @@ jobs:
 
       - name: Run Repomix
         env:
-          COGDEX_REPO_URL: ${{ secrets.COGDEX_REPO_URL }}
+          COGDEX_REPO_URL: ${{ secrets.COGDEX_REPO_URL || vars.COGDEX_REPO_URL }}
         run: |
-          npx repomix --compress --remote $COGDEX_REPO_URL
+          REMOTE_URL="${COGDEX_REPO_URL:-${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}}"
+          npx repomix --compress --remote "$REMOTE_URL"
 
       - name: Trigger Webhook
         env:
