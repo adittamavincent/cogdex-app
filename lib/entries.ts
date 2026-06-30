@@ -3260,6 +3260,28 @@ function cleanBlockForAppend(block: any): any {
   const type = block.type;
   if (!type) return null;
 
+  if (type === "child_page" && block.id) {
+    return {
+      object: "block",
+      type: "link_to_page",
+      link_to_page: {
+        type: "page_id",
+        page_id: String(block.id)
+      }
+    };
+  }
+
+  if (type === "child_database" && block.id) {
+    return {
+      object: "block",
+      type: "link_to_page",
+      link_to_page: {
+        type: "database_id",
+        database_id: String(block.id)
+      }
+    };
+  }
+
   const WRITABLE_TYPES = new Set([
     "paragraph",
     "heading_1",
