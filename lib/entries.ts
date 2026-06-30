@@ -2949,7 +2949,11 @@ export async function handleChatLink(projectId: string, entryId: string | undefi
   // 1. Find CHAT URL in Project page properties
   const projectPage = await notion.pages.retrieve({ page_id: projectId }) as any;
   const chatUrlProp = findProperty(projectPage.properties || {}, "CHAT URL");
-  const chatUrl = chatUrlProp?.url || chatUrlProp?.rich_text?.[0]?.plain_text || "";
+  const chatUrlRaw =
+    chatUrlProp?.url ||
+    (Array.isArray(chatUrlProp?.rich_text) ? richTextToPlain(chatUrlProp.rich_text) : "") ||
+    "";
+  const chatUrl = normalizeNotionUrl(extractFirstUrl(chatUrlRaw) || chatUrlRaw);
 
   if (!chatUrl) {
     debug("No CHAT URL found in project page properties.");
@@ -3236,6 +3240,20 @@ function richTextToPlain(richText: any[]): string {
     .map(rt => rt?.plain_text ?? rt?.text?.content ?? "")
     .filter(Boolean)
     .join("");
+}
+
+function extractFirstUrl(text: string): string | null {
+  if (!text) return null;
+  const match = text.match(/https?:\/\/[^\s<>"'`]+/i);
+  return match ? match[0] : null;
+}
+
+function normalizeNotionUrl(url: string): string {
+  if (!url) return "";
+  let u = String(url).trim();
+  u = u.replace(/^`+/, "").replace(/`+$/, "");
+  u = u.replace(/^[<("']+/, "").replace(/[>)"']+$/, "");
+  return u.trim();
 }
 
 function cleanBlockForAppend(block: any): any {
